@@ -1,0 +1,30 @@
+{
+  "id": "imagenia",
+  "name": {
+    "zh-CN": "Imagenia",
+    "en-US": "Imagenia"
+  },
+  "version": "0.1.0",
+  "type": "general",
+  "description": {
+    "zh-CN": "本地 AI 图像生成工作台",
+    "en-US": "A local AI image generation workbench"
+  },
+  "author": "Imagenia",
+  "entry": {
+    "backend": "plugin.py",
+    "frontend": "frontend/index.js"
+  },
+  "dependencies": [],
+  "qwenpaw_version": {
+    "min": "2.2.1",
+    "max": "2.3.0"
+  },
+  "meta": {
+    "menu": {
+      "id": "imagenia",
+      "label": "Imagenia",
+      "icon": "image"
+    }
+  }
+}
