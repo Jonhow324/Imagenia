@@ -20,6 +20,8 @@ __pycache__/
 # Frontend
 node_modules/
 dist/
+!plugin/frontend/dist/
+!plugin/frontend/dist/**
 coverage/
 
 # Editors and OS

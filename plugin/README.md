@@ -1,8 +1,39 @@
-# Imagenia 插件骨架
+# Imagenia QwenPaw 插件
 
-这是 Issue #3 的可加载插件骨架和后端 HTTP 测试接缝。当前阶段只提供本地 mock 工作台、健康检查、任务创建边界和确定性的 `FakeImageProvider`；不会调用 OpenAI，也不会产生费用。
+Imagenia 是面向 QwenPaw 2.2.1 的本地 AI 图像工作台。当前仓库包含已经通过真实宿主验证的插件骨架，以及 Issue #2 的 React + Vite + Tailwind CSS + shadcn/ui mock 工作台。
 
-## 本地测试
+## 前端工作台
+
+前端源码位于 `plugin/frontend/src/`，生产入口是 `plugin/frontend/dist/index.js`。QwenPaw 提供 React/ReactDOM；生产 bundle 将二者标记为 external，避免在宿主中加载第二份 React。
+
+工作台目前使用 mock 数据覆盖：
+
+- API Key 已配置与未配置；
+- 表单校验、生成和编辑提交；
+- `pending`、`running`、`succeeded`、`failed` 任务；
+- 图片加载、空结果、类型/收藏筛选和加载更多失败；
+- 详情 Sheet、一级来源跳转、收藏反馈和删除确认；
+- 成功后刷新并高亮新资产，不自动打开详情。
+
+本地预览：
+
+```bash
+cd plugin/frontend
+npm install
+npm run dev
+```
+
+类型检查和生产构建：
+
+```bash
+cd plugin/frontend
+npm run typecheck
+npm run build
+```
+
+Tailwind preflight 已关闭，生成的选择器统一限制在 `.imagenia-root` 下；Radix 的 Select、Tooltip、Sheet 和 AlertDialog 使用插件自己的 portal 容器，避免样式泄漏到 QwenPaw Console。
+
+## 后端测试
 
 在仓库根目录执行：
 
@@ -11,10 +42,4 @@ python -m pip install -r plugin/requirements-dev.txt
 python -m pytest plugin/tests -q
 ```
 
-测试会为每个用例创建临时 SQLite 数据库和临时图片目录。真实 provider 尚未接入，测试不需要 API Key。
-
-## QwenPaw 加载
-
-插件清单是 `plugin/plugin.json`，后端入口是 `plugin/plugin.py`，前端入口是 `plugin/frontend/index.js`；`index.html` 是脱离 QwenPaw 的本地 mock 预览。数据目录可由 `IMAGENIA_DATA_DIR` 覆盖；未配置时使用 `~/.qwenpaw/plugins/imagenia`。
-
-`plugin.py` 通过 QwenPaw 2.2.x 的 `register_http_router` 注册 FastAPI 路由；依赖无关的 ASGI 应用仍用于本地 HTTP 测试。该注册方式已在 QwenPaw 2.2.1 宿主中完成后端加载、HTTP 契约、菜单注册、页面渲染和前端健康检查请求验证，见 `docs/qwenpaw-2.2.1-verification.md`。
+当前后端仍是 Issue #3 的 HTTP 测试接缝和确定性 `FakeImageProvider`，不会调用 OpenAI，也不会产生费用。真实宿主验证记录见 `plugin/docs/qwenpaw-2.2.1-verification.md`。

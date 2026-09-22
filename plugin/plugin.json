@@ -13,7 +13,7 @@
   "author": "Imagenia",
   "entry": {
     "backend": "plugin.py",
-    "frontend": "frontend/index.js"
+    "frontend": "frontend/dist/index.js"
   },
   "dependencies": [],
   "qwenpaw_version": {
@@ -23,8 +23,7 @@
   "meta": {
     "menu": {
       "id": "imagenia",
-      "label": "Imagenia",
-      "icon": "image"
+      "label": "Imagenia"
     }
   }
 }

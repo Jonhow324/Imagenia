@@ -1,24 +1,17 @@
 <!doctype html>
 <html lang="zh-CN">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Imagenia</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Imagenia Workbench Preview</title>
+    <style>
+      html, body, #root { min-height: 100%; margin: 0; }
+      body { background: #fafafa; }
+    </style>
   </head>
   <body>
-    <main class="shell">
-      <header><div><p class="eyebrow">IMAGE WORKBENCH</p><h1>Imagenia</h1></div><span id="health" class="badge">连接中…</span></header>
-      <section class="workspace">
-        <form id="generate-form" class="panel">
-          <label for="prompt">提示词</label>
-          <textarea id="prompt" name="prompt" rows="7" placeholder="描述你想生成的图片…"></textarea>
-          <div class="row"><label>画幅<select name="size"><option value="square">方形</option><option value="landscape">横向</option><option value="portrait">纵向</option></select></label><label>质量<select name="quality"><option value="standard">标准</option><option value="high">高</option></select></label></div>
-          <button type="submit">生成图片</button><p id="message" class="muted">当前为 mock 工作台，尚未连接真实 OpenAI。</p>
-        </form>
-        <section class="panel gallery"><div class="section-heading"><h2>资料库</h2><span class="muted">暂无图片</span></div><div class="empty">提交一次生成任务后，资产会出现在这里。</div></section>
-      </section>
-    </main>
-    <script type="module" src="./app.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/preview.tsx"></script>
   </body>
 </html>
