@@ -17,4 +17,4 @@ python -m pytest plugin/tests -q
 
 插件清单是 `plugin/plugin.json`，后端入口是 `plugin/plugin.py`，前端入口是 `plugin/frontend/index.js`；`index.html` 是脱离 QwenPaw 的本地 mock 预览。数据目录可由 `IMAGENIA_DATA_DIR` 覆盖；未配置时使用 `~/.qwenpaw/plugins/imagenia`。
 
-`plugin.py` 通过 QwenPaw 2.2.x 的 `register_http_router` 注册 FastAPI 路由；依赖无关的 ASGI 应用仍用于本地 HTTP 测试。由于当前仓库没有 QwenPaw 宿主运行时，宿主 API 的最终方法名仍需在 QwenPaw 2.2.1 环境中做一次加载验证，见 `docs/qwenpaw-2.2.1-verification.md`。
+`plugin.py` 通过 QwenPaw 2.2.x 的 `register_http_router` 注册 FastAPI 路由；依赖无关的 ASGI 应用仍用于本地 HTTP 测试。该注册方式已在 QwenPaw 2.2.1 宿主中完成后端加载、HTTP 契约、菜单注册、页面渲染和前端健康检查请求验证，见 `docs/qwenpaw-2.2.1-verification.md`。
