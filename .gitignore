@@ -26,3 +26,7 @@ coverage/
 .idea/
 .vscode/
 .DS_Store
+
+# Local agent skills
+.agents/skills/
+skills-lock.json

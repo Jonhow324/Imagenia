@@ -40,3 +40,17 @@ No usable Git history is present in this checkout, so follow Conventional Commit
 ## Security & Configuration Tips
 
 Never commit credentials, tokens, personal paths, or production configuration. Use placeholders in examples. Clearly label network, file, and shell capabilities, validate model-supplied inputs, and avoid exposing stack traces or secrets in plugin responses.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs for this repository live in GitHub Issues and are managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+This repository uses the default triage labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository. Read `CONTEXT.md` and relevant ADRs under `docs/adr/` before exploring or modifying the codebase. See `docs/agents/domain.md`.
