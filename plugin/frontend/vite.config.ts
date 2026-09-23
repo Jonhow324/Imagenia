@@ -1,24 +1,18 @@
 import path from "node:path"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
-import cssInjectedByJsPlugin from "vite-plugin-css-injected-by-js"
 
+// The SPA is a separate document with its own React tree and CSS scope.
 export default defineConfig({
-  plugins: [react({ jsxRuntime: "classic" }), cssInjectedByJsPlugin()],
+  base: "./",
+  plugins: [react()],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   build: {
+    outDir: "dist/app",
     emptyOutDir: true,
-    lib: {
-      entry: "src/index.tsx",
-      formats: ["es"],
-      fileName: () => "index.js",
-    },
-    rollupOptions: {
-      external: ["react", "react-dom"],
-    },
   },
 })

@@ -4,7 +4,12 @@ Imagenia 是面向 QwenPaw 2.2.1 的本地 AI 图像工作台。当前仓库包�
 
 ## 前端工作台
 
-前端源码位于 `plugin/frontend/src/`，生产入口是 `plugin/frontend/dist/index.js`。QwenPaw 提供 React/ReactDOM；生产 bundle 将二者标记为 external，避免在宿主中加载第二份 React。
+前端源码位于 `plugin/frontend/src/`，构建产物分为两部分：
+
+- `plugin/frontend/dist/index.js`：不引入工作台或第三方运行时的宿主薄入口。宿主通过 Blob `import()` 加载它，它使用 `window.QwenPaw.host.React` 注册 `/imagenia` 路由与侧边栏菜单，并渲染 iframe。
+- `plugin/frontend/dist/app/index.html` 和 `assets/`：同源 iframe 中的独立 SPA，包含自己的 React/ReactDOM、shadcn/Radix、Tailwind CSS 和字体；静态资源使用相对路径，不与宿主共享 React dispatcher。入口 URL 为 `/api/frontend_plugin/imagenia/files/frontend/dist/app/index.html`。
+
+`plugin.json` 仍以 `frontend/dist/index.js` 为插件入口。不要把工作台组件导入宿主入口，也不要将 iframe SPA 的 React 设为 external。当前 iframe 仅展示 mock 数据；后续 HTTP 接口联调应验证 iframe 内 Bearer 认证、401 反馈和受控图片加载。
 
 工作台目前使用 mock 数据覆盖：
 
@@ -31,7 +36,9 @@ npm run typecheck
 npm run build
 ```
 
-Tailwind preflight 已关闭，生成的选择器统一限制在 `.imagenia-root` 下；Radix 的 Select、Tooltip、Sheet 和 AlertDialog 使用插件自己的 portal 容器，避免样式泄漏到 QwenPaw Console。
+`npm run build` 依次类型检查、构建 `dist/app/`、构建 `dist/index.js` 并运行产物接缝测试。`npm run test:build` 可以在已有产物上单独运行。将整个 `plugin/`（包括两个前端产物）同步到宿主后重启插件，在 QwenPaw 2.2.1 验证侧边栏、iframe 加载、交互与浏览器控制台。
+
+Tailwind preflight 已关闭，选择器限制在 `.imagenia-root` 下；Select、Tooltip、Sheet 和 AlertDialog 使用工作台自己的 portal 容器。iframe 进一步隔离了工作台样式和宿主页面。
 
 ## 后端测试
 
