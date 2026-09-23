@@ -162,3 +162,43 @@ async def test_started_worker_completes_queued_job_without_manual_process(genera
         finally:
             app.worker.stop()
     assert provider.calls == 1
+
+@pytest.mark.anyio
+async def test_asset_records_effective_backend_model_not_user_supplied(generation):
+    app, provider = generation
+    provider.model = lambda: "configured-image-v2"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+        invalid = await http.post("/api/imagenia/jobs/generate", json={"prompt": "view", "model": "override"})
+        queued = await http.post("/api/imagenia/jobs/generate", json={"prompt": "view"})
+        app.worker.process_next()
+        job = await http.get(f"/api/imagenia/jobs/{queued.json()['job_id']}")
+        asset = await http.get(f"/api/imagenia/assets/{job.json()['result_asset_id']}")
+    assert invalid.status_code == 422
+    assert asset.json()["model"] == "configured-image-v2"
+
+@pytest.mark.anyio
+async def test_worker_uses_saved_model_and_endpoint_at_execution_without_network(generation, monkeypatch):
+    import urllib.request
+    import json
+    from src.imagenia_plugin.provider import OpenAIImageProvider
+    app, fake = generation
+    captured = []
+    import io
+    import base64
+    def fake_open(request, timeout):
+        captured.append((request.full_url, json.loads(request.data)["model"]))
+        return io.BytesIO(json.dumps({"data": [{
+            "b64_json": base64.b64encode(fake.image_bytes).decode()}]}).encode())
+    monkeypatch.setattr(urllib.request, "urlopen", fake_open)
+    app.worker.provider = OpenAIImageProvider(lambda: app.settings.effective()[0],
+        base_url=lambda: app.settings.effective()[2], model=lambda: app.settings.effective()[3])
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+        queued = await http.post("/api/imagenia/jobs/generate", json={"prompt": "view"})
+        saved = await http.put("/api/imagenia/settings/openai", json={
+            "base_url": "https://gateway.example/v1", "model": "image-custom"})
+        assert saved.status_code == 200
+        assert app.worker.process_next()
+        job = await http.get(f"/api/imagenia/jobs/{queued.json()['job_id']}")
+        asset = await http.get(f"/api/imagenia/assets/{job.json()['result_asset_id']}")
+    assert captured == [("https://gateway.example/v1/images/generations", "image-custom")]
+    assert asset.json()["model"] == "image-custom"

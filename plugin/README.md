@@ -51,11 +51,11 @@ python -m pytest plugin/tests -q
 
 常规测试显式注入 `FakeImageProvider`，不访问 OpenAI、不会产生费用；QwenPaw 正式插件入口使用真实 `OpenAIImageProvider`。真实宿主验证记录见 `plugin/docs/qwenpaw-2.2.1-verification.md`。
 
-## 全局 OpenAI 配置（Issue #4）
+## 全局 OpenAI 配置（Issues #4、#12）
 
-QwenPaw 管理员可在 iframe 工作台的“配置”中保存或覆盖一份全局 API Key。优先使用插件进程中的 `IMAGENIA_OPENAI_API_KEY` 环境变量；否则使用插件数据目录的 `config/openai.json`。该目录权限为 `0700`，文件权限为 `0600`。设置 API 仅返回 `configured` 和 `source`（`none`/`file`/`environment`），不返回密钥。若环境变量已配置，保存文件不会覆盖当前生效的环境变量。请勿把数据目录或密钥纳入 Git。
+QwenPaw 管理员可在 iframe 工作台的“配置”中保存或覆盖一份全局 API Key。优先使用插件进程中的 `IMAGENIA_OPENAI_API_KEY` 环境变量；否则使用插件数据目录的 `config/openai.json`。该目录权限为 `0700`，文件权限为 `0600`。设置 API 返回 `configured`、`source`（`none`/`file`/`environment`）以及当前生效的 `base_url` 和 `model`，不返回密钥。配置面板可保存 API Key、base URL 和默认模型；不输入新密钥时保存其余字段不会清除已有密钥。`IMAGENIA_OPENAI_BASE_URL`、`IMAGENIA_OPENAI_MODEL` 也分别覆盖文件值；默认分别为 `https://api.openai.com/v1` 和 `gpt-image-2.5`。生成请求仍不得指定模型。若环境变量已配置，保存文件不会覆盖当前生效的环境变量。请勿把数据目录或密钥纳入 Git。
 
-仅点击“测试连接”时后端才以当前生效密钥对 `GET https://api.openai.com/v1/models` 发起一次只读认证请求（5 秒超时）；加载和保存配置都不会调用 OpenAI，测试不会请求图像生成。正式宿主中提交生成任务会调用 OpenAI Images API，**可能产生费用**。测试环境使用 fake provider 不会产生费用。
+仅点击“测试连接”时后端才以当前生效密钥对当前 `base_url` 的 `GET /models` 发起一次只读认证请求（5 秒超时）；加载和保存配置都不会调用 OpenAI，测试不会请求图像生成。正式宿主中提交生成任务会调用 OpenAI Images API，**可能产生费用**。测试环境使用 fake provider 不会产生费用。
 
 宿主验收：同步完整插件到 QwenPaw 2.2.1 后登录，打开 iframe；分别验证无配置、保存、覆盖、环境变量优先，以及点击测试连接的结果。登出或使登录 token 失效后，确认读取/写入遭宿主拒绝且页面显示安全的登录失效提示；本地 ASGI 测试不模拟宿主鉴权。
 
@@ -64,3 +64,5 @@ QwenPaw 管理员可在 iframe 工作台的“配置”中保存或覆盖一份�
 生成提交 `POST /api/imagenia/jobs/generate` 返回 `202` 与 `job_id`；后台独立单 worker 将任务从 `pending` 处理到 `running`、`succeeded` 或 `failed`，前端每 1.5 秒通过 `GET /api/imagenia/jobs/{job_id}` 轮询。重新打开页面时通过 `GET /api/imagenia/jobs` 恢复近期任务。成功后从 `GET /api/imagenia/assets` 刷新资料库，图片字节从需要同一 Bearer token 的 `/api/imagenia/assets/{id}/content` 获取；新资产高亮、不自动弹详情。资产文件按年月与 UUID 保存在插件数据目录，元数据在 SQLite 中。上次运行遗留的 `running` 标记为 `interrupted`，`pending` 恢复执行。队列最多允许 50 个待处理任务。
 
 正式宿主默认模型固定为 `gpt-image-1`，画幅分别映射 1024×1024、1536×1024、1024×1536；质量 `standard` 映射 OpenAI 的 `medium`，`high` 对应 `high`。生成调用可能收费，请使用可用密钥和低成本提示词谨慎验证。端到端验收需在 QwenPaw iframe 验证任务提交、轮询、重启恢复、图片展示及登录失效后的安全反馈；本机自动化不代表宿主验收完成。
+
+接入兼容网关时请填写 API 根地址（包含 `/v1` 等必要前缀），不要填写 `/images/generations` 完整接口路径。连接测试仅能检验 `/models` 的认证，不保证网关支持图像生成；真实成功生图与计费行为需在宿主手动确认。

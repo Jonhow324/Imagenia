@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Spinner } from "@/components/ui/spinner"
-import { saveKey, testConnection, type SettingsStatus } from "@/services/settings"
+import { saveSettings, testConnection, type SettingsStatus } from "@/services/settings"
 
 interface Props {
   open: boolean
@@ -19,6 +19,15 @@ interface Props {
 
 export function SettingsSheet({ open, onOpenChange, status, onSaved }: Props) {
   const [key, setKey] = React.useState("")
+  const [baseUrl, setBaseUrl] = React.useState("")
+  const [model, setModel] = React.useState("")
+
+  React.useEffect(() => {
+    if (open && status) {
+      setBaseUrl(status.openai.base_url)
+      setModel(status.openai.model)
+    }
+  }, [open, status])
   const [busy, setBusy] = React.useState<"save" | "test" | null>(null)
   const [error, setError] = React.useState("")
   const configured = status?.openai.configured ?? false
@@ -33,17 +42,17 @@ export function SettingsSheet({ open, onOpenChange, status, onSaved }: Props) {
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!key.trim()) {
-      setError("请输入 API Key。")
+    if (!baseUrl.trim() || !model.trim()) {
+      setError("请输入服务地址和模型。")
       return
     }
     setBusy("save")
     setError("")
     try {
-      const next = await saveKey(key.trim())
+      const next = await saveSettings({ ...(key.trim() ? { api_key: key.trim() } : {}), base_url: baseUrl.trim(), model: model.trim() })
       onSaved(next)
       setKey("")
-      toast.success(next.openai.source === "environment" ? "密钥已保存；当前仍优先使用环境变量" : "API Key 已保存")
+      toast.success(next.openai.source === "environment" ? "配置已保存；环境变量仍优先" : "图像服务配置已保存")
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "保存失败，请稍后重试。")
     } finally {
@@ -91,16 +100,24 @@ export function SettingsSheet({ open, onOpenChange, status, onSaved }: Props) {
               {error ? <FieldError role="alert">{error}</FieldError> : null}
             </Field>
           </FieldGroup>
-          <div className="rounded-xl border p-4">
-            <p className="text-sm font-medium">默认模型</p>
-            <p className="mt-1 text-sm text-muted-foreground">gpt-image-1 · 由后端配置，前端不可自由修改</p>
-          </div>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="imagenia-base-url">服务地址（base URL）</FieldLabel>
+              <Input id="imagenia-base-url" type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} disabled={busy !== null} />
+              <FieldDescription>当前生效：{status?.openai.base_url ?? "—"}；环境变量优先。填写 API 根地址，不含 /images/generations。</FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="imagenia-model">默认模型</FieldLabel>
+              <Input id="imagenia-model" value={model} onChange={(event) => setModel(event.target.value)} disabled={busy !== null} />
+              <FieldDescription>当前生效：{status?.openai.model ?? "—"}。生成表单不允许逐任务指定模型。</FieldDescription>
+            </Field>
+          </FieldGroup>
           <Separator />
           <p className="text-xs leading-5 text-muted-foreground">“测试连接”只检查 OpenAI 认证，不会执行可能收费的完整生图请求。</p>
           <SheetFooter className="px-0">
-            <Button type="submit" disabled={busy !== null || !key.trim()}>
+            <Button type="submit" disabled={busy !== null || !baseUrl.trim() || !model.trim()}>
               {busy === "save" ? <Spinner aria-hidden="true" /> : null}
-              保存 API Key
+              保存配置
             </Button>
             <Button type="button" variant="secondary" disabled={!configured || busy !== null} onClick={test}>
               {busy === "test" ? <Spinner aria-hidden="true" /> : null}

@@ -10,6 +10,10 @@ import urllib.request
 import uuid
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
+
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_MODEL = "gpt-image-2.5"
 
 
 class ConfigurationUnavailable(Exception):
@@ -24,10 +28,29 @@ class ConnectionFailed(Exception):
         super().__init__(code)
 
 
-def probe_openai(key: str) -> None:
+def valid_base_url(value: object) -> bool:
+    if not isinstance(value, str) or not value or value != value.strip() or len(value) > 2048:
+        return False
+    try:
+        parsed = urlsplit(value)
+        return (parsed.scheme in ("http", "https") and bool(parsed.hostname) and
+                parsed.port != 0 and not parsed.username and not parsed.password and
+                not parsed.query and not parsed.fragment and
+                all(33 <= ord(char) <= 126 for char in value) and not value.endswith("/images/generations"))
+    except ValueError:
+        return False
+
+
+def valid_model(value: object) -> bool:
+    return isinstance(value, str) and 0 < len(value) <= 128 and all(
+        char.isascii() and (char.isalnum() or char in "-_./") for char in value
+    )
+
+
+def probe_openai(key: str, base_url: str = DEFAULT_BASE_URL) -> None:
     """Verify authorization with a read-only models request, never an image request."""
     request = urllib.request.Request(
-        "https://api.openai.com/v1/models",
+        f"{base_url.rstrip('/')}/models",
         headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
         method="GET",
     )
@@ -44,12 +67,12 @@ def probe_openai(key: str) -> None:
 
 
 class OpenAISettings:
-    def __init__(self, data_dir: Path, probe: Callable[[str], None] = probe_openai) -> None:
+    def __init__(self, data_dir: Path, probe: Callable[..., None] = probe_openai) -> None:
         self.directory = data_dir / "config"
         self.file = self.directory / "openai.json"
         self.probe = probe
 
-    def _file_key(self) -> str | None:
+    def _read_file(self) -> dict[str, str]:
         try:
             directory_mode = self.directory.lstat().st_mode
             if not stat.S_ISDIR(directory_mode) or stat.S_IMODE(directory_mode) & 0o077:
@@ -60,28 +83,45 @@ class OpenAISettings:
                 if not stat.S_ISREG(mode) or stat.S_IMODE(mode) & 0o077:
                     raise ConfigurationUnavailable()
                 data = json.load(private_file)
-            key = data.get("api_key")
-            if not isinstance(key, str) or not key.strip():
+            if not isinstance(data, dict) or any(
+                name in data and not validator(data[name]) for name, validator in
+                (("api_key", lambda x: isinstance(x, str) and bool(x.strip())),
+                 ("base_url", valid_base_url), ("model", valid_model))
+            ):
                 raise ConfigurationUnavailable()
-            return key
+            return data
         except FileNotFoundError:
-            return None
-        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            return {}
+        except (OSError, ValueError, TypeError, AttributeError):
             raise ConfigurationUnavailable() from None
 
+    def effective(self) -> tuple[str | None, str, str, str]:
+        data = self._read_file()
+        key = os.environ.get("IMAGENIA_OPENAI_API_KEY", "").strip()
+        source = "environment" if key else "file" if data.get("api_key") else "none"
+        base_url = os.environ.get("IMAGENIA_OPENAI_BASE_URL") or data.get("base_url") or DEFAULT_BASE_URL
+        model = os.environ.get("IMAGENIA_OPENAI_MODEL") or data.get("model") or DEFAULT_MODEL
+        if not valid_base_url(base_url) or not valid_model(model):
+            raise ConfigurationUnavailable()
+        return key or data.get("api_key"), source, base_url, model
+
     def current(self) -> tuple[str | None, str]:
-        environment_key = os.environ.get("IMAGENIA_OPENAI_API_KEY", "").strip()
-        if environment_key:
-            return environment_key, "environment"
-        file_key = self._file_key()
-        return (file_key, "file") if file_key else (None, "none")
+        key, source, _, _ = self.effective()
+        return key, source
 
     def status(self) -> dict[str, object]:
-        key, source = self.current()
-        return {"openai": {"configured": bool(key), "source": source}}
+        key, source, base_url, model = self.effective()
+        return {"openai": {"configured": bool(key), "source": source, "base_url": base_url, "model": model}}
 
-    def save(self, key: str) -> None:
-        # Never log or interpolate the key into an exception or response.
+    def save(self, key: str | None = None, base_url: str | None = None, model: str | None = None) -> None:
+        # Partial updates preserve previously saved fields; omitted key never clears a secret.
+        data = self._read_file()
+        if key is not None:
+            data["api_key"] = key
+        if base_url is not None:
+            data["base_url"] = base_url
+        if model is not None:
+            data["model"] = model
         try:
             self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
             if self.directory.is_symlink():
@@ -91,7 +131,7 @@ class OpenAISettings:
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
                 with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-                    json.dump({"api_key": key}, output)
+                    json.dump(data, output)
                     output.flush()
                     os.fsync(output.fileno())
                 os.replace(temporary, self.file)
@@ -101,8 +141,8 @@ class OpenAISettings:
             raise ConfigurationUnavailable() from None
 
     def test_connection(self) -> bool:
-        key, _ = self.current()
+        key, _, base_url, _ = self.effective()
         if not key:
             return False
-        self.probe(key)
+        self.probe(key, base_url)
         return True

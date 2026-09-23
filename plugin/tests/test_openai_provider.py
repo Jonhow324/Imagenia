@@ -29,7 +29,7 @@ def test_models_sizes_quality_and_base64_mapping(monkeypatch):
     assert [call[2]["size"] for call in calls] == ["1024x1024", "1536x1024", "1024x1536"]
     assert [call[2]["quality"] for call in calls] == ["medium", "high", "medium"]
     assert all(call[0] == "https://api.openai.com/v1/images/generations" and
-               call[1] == "POST" and call[2]["model"] == "gpt-image-1" and
+               call[1] == "POST" and call[2]["model"] == "gpt-image-2.5" and
                call[2]["n"] == 1 and call[3] == "Bearer sk-test-only" and call[4] == 570 for call in calls)
 
 
@@ -43,3 +43,15 @@ def test_missing_config_and_upstream_failure_are_safe(monkeypatch):
     with pytest.raises(ProviderError, match="invalid_api_key") as error:
         OpenAIImageProvider(lambda: "sk-secret").generate("prompt", size="square", quality="high")
     assert "sk-secret" not in str(error.value)
+
+
+def test_configured_endpoint_and_model_are_sent_without_network(monkeypatch):
+    captured = []
+    def fake_open(request, timeout):
+        captured.append((request.full_url, json.loads(request.data)["model"]))
+        return io.BytesIO(b'{"data":[{"b64_json":"cG5n"}]}')
+    monkeypatch.setattr(urllib.request, "urlopen", fake_open)
+    provider = OpenAIImageProvider(lambda: "sk-test-only",
+        base_url=lambda: "https://gateway.example/v1/", model=lambda: "custom-image-v2")
+    assert provider.generate("test", size="square", quality="standard") == b"png"
+    assert captured == [("https://gateway.example/v1/images/generations", "custom-image-v2")]

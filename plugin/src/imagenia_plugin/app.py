@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 from .provider import FakeImageProvider, ImageProvider
 from .jobs import GenerationWorker
-from .settings import ConfigurationUnavailable, ConnectionFailed, OpenAISettings
+from .settings import ConfigurationUnavailable, ConnectionFailed, OpenAISettings, valid_base_url, valid_model
 from .storage import open_database
 
 
@@ -131,11 +131,17 @@ class ImageniaApp:
             return 400, {"error": {"code": "invalid_json", "message": "Request body must be JSON"}}
         if not isinstance(request, dict):
             return 422, {"error": {"code": "invalid_api_key", "message": "A valid API key is required"}}
+        if not request or any(field not in {"api_key", "base_url", "model"} for field in request):
+            return 422, {"error": {"code": "invalid_options", "message": "Unsupported settings"}}
         key = request.get("api_key")
-        if not isinstance(key, str) or not key.strip() or len(key) > 512 or any(ord(char) < 33 or ord(char) > 126 for char in key.strip()):
+        if "api_key" in request and (not isinstance(key, str) or not key.strip() or len(key) > 512 or
+                any(ord(char) < 33 or ord(char) > 126 for char in key.strip())):
             return 422, {"error": {"code": "invalid_api_key", "message": "A valid API key is required"}}
+        if ("base_url" in request and not valid_base_url(request["base_url"])) or ("model" in request and not valid_model(request["model"])):
+            return 422, {"error": {"code": "invalid_options", "message": "Unsupported base URL or model"}}
         try:
-            self.settings.save(key.strip())
+            self.settings.save(key.strip() if key is not None else None,
+                               request.get("base_url"), request.get("model"))
             return 200, self.settings.status()
         except ConfigurationUnavailable:
             return self._settings_unavailable()

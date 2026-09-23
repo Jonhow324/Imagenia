@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .provider import ImageProvider, ProviderError
+from .settings import DEFAULT_MODEL
 from .storage import open_database
 
 
@@ -69,6 +70,8 @@ class GenerationWorker:
                 db.execute("UPDATE generation_jobs SET status='running', started_at=? WHERE id=?", (now(), job["id"]))
             try:
                 options = json.loads(job["request_json"])
+                active_model = getattr(self.provider, "model", DEFAULT_MODEL)
+                active_model = active_model() if callable(active_model) else active_model
                 content = self.provider.generate(job["prompt"], size=options["size"], quality=options["quality"])
                 if not isinstance(content, bytes) or len(content) > 25 * 1024 * 1024 or len(content) < 24 or content[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR":
                     raise ProviderError("invalid_image")
@@ -89,8 +92,8 @@ class GenerationWorker:
                         db.execute("""INSERT INTO image_assets
                             (id,kind,source_asset_id,prompt,model,size,quality,width,height,file_path,
                             mime_type,file_size,created_at,updated_at)
-                            VALUES (?,'generated',NULL,?,'gpt-image-1',?,?,?,?,?,'image/png',?,?,?)""",
-                            (asset_id, job["prompt"], options["size"], options["quality"], width, height,
+                            VALUES (?,'generated',NULL,?,?,?,?,?,?,?,'image/png',?,?,?)""",
+                            (asset_id, job["prompt"], active_model, options["size"], options["quality"], width, height,
                              relative, len(content), timestamp, timestamp))
                         db.execute("""UPDATE generation_jobs SET status='succeeded', result_asset_id=?,
                             finished_at=?, request_json=NULL WHERE id=?""", (asset_id, timestamp, job["id"]))

@@ -3,7 +3,7 @@ const authTokenKey = "qwenpaw_auth_token"
 const base = "/api/imagenia"
 
 export interface SettingsStatus {
-  openai: { configured: boolean; source: "none" | "file" | "environment" }
+  openai: { configured: boolean; source: "none" | "file" | "environment"; base_url: string; model: string }
 }
 
 export class SettingsRequestError extends Error {
@@ -74,11 +74,11 @@ export function getSettings(): Promise<SettingsStatus> {
   return request<SettingsStatus>("/settings")
 }
 
-export function saveKey(apiKey: string): Promise<SettingsStatus> {
+export function saveSettings(settings: { api_key?: string; base_url?: string; model?: string }): Promise<SettingsStatus> {
   return request<SettingsStatus>("/settings/openai", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: apiKey }),
+    body: JSON.stringify(settings),
   })
 }
 

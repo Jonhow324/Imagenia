@@ -10,6 +10,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
+from .settings import DEFAULT_BASE_URL, DEFAULT_MODEL
+
 
 class ProviderError(Exception):
     def __init__(self, code: str) -> None:
@@ -22,22 +24,26 @@ class ImageProvider(Protocol):
 
 
 class OpenAIImageProvider:
-    """Generate one PNG; model and endpoint are fixed by the backend."""
-
-    model = "gpt-image-1"
+    """Generate one PNG with the effective backend model and endpoint."""
     dimensions = {"square": "1024x1024", "landscape": "1536x1024", "portrait": "1024x1536"}
     qualities = {"standard": "medium", "high": "high"}
 
-    def __init__(self, key_lookup: Callable[[], str | None]) -> None:
+    def __init__(self, key_lookup: Callable[[], str | None], *,
+                 base_url: str | Callable[[], str] = DEFAULT_BASE_URL,
+                 model: str | Callable[[], str] = DEFAULT_MODEL) -> None:
         self.key_lookup = key_lookup
+        self.base_url = base_url
+        self.model = model
 
     def generate(self, prompt: str, *, size: str, quality: str) -> bytes:
         key = self.key_lookup()
         if not key:
             raise ProviderError("not_configured")
+        base_url = self.base_url() if callable(self.base_url) else self.base_url
+        model = self.model() if callable(self.model) else self.model
         request = urllib.request.Request(
-            "https://api.openai.com/v1/images/generations",
-            data=json.dumps({"model": self.model, "prompt": prompt,
+            f"{base_url.rstrip('/')}/images/generations",
+            data=json.dumps({"model": model, "prompt": prompt,
                              "size": self.dimensions[size], "quality": self.qualities[quality],
                              "n": 1}).encode("utf-8"),
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
