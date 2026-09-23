@@ -19,7 +19,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { getSettings, type SettingsStatus } from "@/services/settings"
-import { enqueueGeneration, getJob, listAssets, listJobs } from "@/services/generation"
+import { enqueueGeneration, getAsset, getJob, listAssetPage, listJobs } from "@/services/generation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Toaster } from "@/components/ui/sonner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -49,7 +49,17 @@ export function ImageniaWorkbench() {
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [isLoading, setIsLoading] = React.useState(true)
-  const [visibleCount, setVisibleCount] = React.useState(30)
+  const [nextCursor, setNextCursor] = React.useState<string | null>(null)
+  const [libraryError, setLibraryError] = React.useState("")
+  const [loadMoreError, setLoadMoreError] = React.useState(false)
+  const [isLoadingMore, setIsLoadingMore] = React.useState(false)
+  const [reloadVersion, setReloadVersion] = React.useState(0)
+  const pageController = React.useRef<AbortController | null>(null)
+  const [extraDetail, setExtraDetail] = React.useState<ImageAsset | null>(null)
+  const extraUrl = React.useRef<string | null>(null)
+  const sourceNavigation = React.useRef<AbortController | null>(null)
+  const [sourceAsset, setSourceAsset] = React.useState<ImageAsset | null>(null)
+  const [sourceLoading, setSourceLoading] = React.useState(false)
   const [highlightedAssetId, setHighlightedAssetId] = React.useState<string | null>(null)
 
   React.useEffect(() => {
@@ -66,19 +76,26 @@ export function ImageniaWorkbench() {
 
 
 
-  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? null
+  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId)
+    ?? (extraDetail?.id === selectedAssetId ? extraDetail : null)
   const editingAsset = assets.find((asset) => asset.id === editingAssetId) ?? null
-  const sourceAsset = selectedAsset?.sourceAssetId
-    ? assets.find((asset) => asset.id === selectedAsset.sourceAssetId) ?? null
-    : null
-
-  const filteredAssets = assets.filter((asset) => {
-    if (favoriteOnly && !asset.isFavorite) return false
-    if (kindFilter !== "all" && asset.kind !== kindFilter) return false
-    return true
-  })
-  const visibleAssets = filteredAssets.slice(0, visibleCount)
   const filtersActive = favoriteOnly || kindFilter !== "all"
+
+  React.useEffect(() => {
+    const sourceId = selectedAsset?.sourceAssetId
+    setSourceAsset(null)
+    if (!sourceId) { setSourceLoading(false); return }
+    const controller = new AbortController()
+    let url: string | null = null
+    setSourceLoading(true)
+    getAsset(sourceId, controller.signal).then((source) => {
+      url = source.imageUrl
+      if (!controller.signal.aborted) setSourceAsset(source)
+      else URL.revokeObjectURL(url)
+    }).catch(() => { if (!controller.signal.aborted) setSourceAsset(null) })
+      .finally(() => { if (!controller.signal.aborted) setSourceLoading(false) })
+    return () => { controller.abort(); if (url) URL.revokeObjectURL(url) }
+  }, [selectedAsset?.sourceAssetId])
 
   function toggleFavorite(_asset: ImageAsset) {
     toast.info("收藏功能尚未开放，请等待后续工单。")
@@ -97,8 +114,23 @@ export function ImageniaWorkbench() {
     }, 1000)
   }
 
-  async function refreshAssets() {
-    replaceAssets(await listAssets())
+  function refreshAssets() {
+    setReloadVersion((version) => version + 1)
+  }
+
+  function closeDetail() {
+    sourceNavigation.current?.abort()
+    sourceNavigation.current = null
+    setSelectedAssetId(null)
+    setExtraDetail(null)
+    if (extraUrl.current) URL.revokeObjectURL(extraUrl.current)
+    extraUrl.current = null
+  }
+
+  function selectAsset(id: string) {
+    sourceNavigation.current?.abort()
+    sourceNavigation.current = null
+    setSelectedAssetId(id)
   }
 
   React.useEffect(() => {
@@ -106,18 +138,91 @@ export function ImageniaWorkbench() {
     listJobs().then((fresh) => { if (active) setJobs(fresh) }).catch((cause: unknown) => {
       if (active) setSettingsError(cause instanceof Error ? cause.message : "无法读取任务记录。")
     })
-    listAssets().then((fresh) => {
-      if (active) replaceAssets(fresh)
-      else for (const asset of fresh) URL.revokeObjectURL(asset.imageUrl)
-    }).catch((cause: unknown) => {
-      if (active) setSettingsError(cause instanceof Error ? cause.message : "无法加载图片资料库。")
-    }).finally(() => { if (active) setIsLoading(false) })
-    return () => {
-      active = false
-      for (const url of assetUrls.current) URL.revokeObjectURL(url)
-      assetUrls.current = []
-    }
+    return () => { active = false }
   }, [])
+
+  React.useEffect(() => {
+    const controller = new AbortController()
+    pageController.current?.abort()
+    setIsLoading(true)
+    setIsLoadingMore(false)
+    setLoadMoreError(false)
+    setLibraryError("")
+    setNextCursor(null)
+    closeDetail()
+    listAssetPage({ favorite: favoriteOnly, kind: kindFilter, signal: controller.signal }).then((page) => {
+      if (!controller.signal.aborted) {
+        replaceAssets(page.items)
+        setNextCursor(page.nextCursor)
+      } else for (const asset of page.items) URL.revokeObjectURL(asset.imageUrl)
+    }).catch((cause: unknown) => {
+      if (!controller.signal.aborted) setLibraryError(cause instanceof Error ? cause.message : "无法加载图片资料库。")
+    }).finally(() => { if (!controller.signal.aborted) setIsLoading(false) })
+    return () => controller.abort()
+  }, [favoriteOnly, kindFilter, reloadVersion])
+
+  React.useEffect(() => () => {
+    pageController.current?.abort()
+    sourceNavigation.current?.abort()
+    for (const url of assetUrls.current) URL.revokeObjectURL(url)
+    assetUrls.current = []
+    if (extraUrl.current) URL.revokeObjectURL(extraUrl.current)
+    extraUrl.current = null
+  }, [])
+
+  async function loadMore() {
+    if (!nextCursor || isLoadingMore || pageController.current) return
+    const controller = new AbortController()
+    pageController.current = controller
+    setIsLoadingMore(true)
+    setLoadMoreError(false)
+    try {
+      const page = await listAssetPage({ favorite: favoriteOnly, kind: kindFilter,
+        cursor: nextCursor, signal: controller.signal })
+      if (controller.signal.aborted) {
+        for (const asset of page.items) URL.revokeObjectURL(asset.imageUrl)
+        return
+      }
+      assetUrls.current.push(...page.items.map((asset) => asset.imageUrl))
+      setAssets((current) => [...current, ...page.items])
+      setNextCursor(page.nextCursor)
+    } catch {
+      if (!controller.signal.aborted) setLoadMoreError(true)
+    } finally {
+      if (!controller.signal.aborted) setIsLoadingMore(false)
+      if (pageController.current === controller) pageController.current = null
+    }
+  }
+
+  async function openSource(asset: ImageAsset) {
+    sourceNavigation.current?.abort()
+    const controller = new AbortController()
+    sourceNavigation.current = controller
+    const inPage = assets.find((item) => item.id === asset.id)
+    if (inPage) {
+      setSelectedAssetId(inPage.id)
+      sourceNavigation.current = null
+      if (extraUrl.current) URL.revokeObjectURL(extraUrl.current)
+      extraUrl.current = null
+      setExtraDetail(null)
+      return
+    }
+    try {
+      const detail = await getAsset(asset.id, controller.signal)
+      if (controller.signal.aborted) {
+        URL.revokeObjectURL(detail.imageUrl)
+        return
+      }
+      if (extraUrl.current) URL.revokeObjectURL(extraUrl.current)
+      extraUrl.current = detail.imageUrl
+      setExtraDetail(detail)
+      setSelectedAssetId(detail.id)
+    } catch (cause) {
+      if (!controller.signal.aborted) toast.error(cause instanceof Error ? cause.message : "无法加载来源图片。")
+    } finally {
+      if (sourceNavigation.current === controller) sourceNavigation.current = null
+    }
+  }
 
   React.useEffect(() => {
     const activeJobs = jobs.filter((job) => job.status === "pending" || job.status === "running")
@@ -130,7 +235,7 @@ export function ImageniaWorkbench() {
         for (const job of activeJobs) {
           const fresh = await getJob(job.id)
           if (fresh.status === "succeeded" && fresh.resultAssetId) {
-            await refreshAssets()
+            refreshAssets()
             setHighlightedAssetId(fresh.resultAssetId)
             window.setTimeout(() => setHighlightedAssetId((id) => id === fresh.resultAssetId ? null : id), 5000)
             toast.success("图像已完成", { description: "新作品已加入资料库并高亮显示。" })
@@ -248,7 +353,7 @@ export function ImageniaWorkbench() {
                       <ImagesIcon className="size-5 text-muted-foreground" aria-hidden="true" />
                       <h2 id="library-title" className="text-lg font-semibold">图片资料库</h2>
                     </div>
-                    <p className="mt-1 text-sm text-muted-foreground">{filteredAssets.length} 张作品 · 全局共享</p>
+                    <p className="mt-1 text-sm text-muted-foreground">{assets.length} 张已加载作品 · 全局共享</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <SlidersHorizontalIcon className="size-4 text-muted-foreground" aria-hidden="true" />
@@ -268,18 +373,25 @@ export function ImageniaWorkbench() {
                   </div>
                 </div>
 
-                <AssetWaterfall
-                  assets={visibleAssets}
+                {libraryError && !isLoading ? (
+                  <Alert variant="destructive">
+                    <AlertTitle>图片资料库加载失败</AlertTitle>
+                    <AlertDescription>{libraryError}</AlertDescription>
+                    <Button type="button" variant="outline" className="mt-3" onClick={refreshAssets}>重试</Button>
+                  </Alert>
+                ) : <AssetWaterfall
+                  assets={assets}
                   filtered={filtersActive}
                   highlightedAssetId={highlightedAssetId}
                   isLoading={isLoading}
-                  hasMore={false}
-                  loadMoreError={false}
-                  onLoadMore={() => {}}
+                  isLoadingMore={isLoadingMore}
+                  hasMore={Boolean(nextCursor)}
+                  loadMoreError={loadMoreError}
+                  onLoadMore={loadMore}
                   onResetFilters={resetFilters}
-                  onOpen={(asset) => setSelectedAssetId(asset.id)}
+                  onOpen={(asset) => selectAsset(asset.id)}
                   onToggleFavorite={toggleFavorite}
-                />
+                />}
               </section>
             </div>
           </div>
@@ -288,15 +400,16 @@ export function ImageniaWorkbench() {
             asset={selectedAsset}
             open={Boolean(selectedAsset)}
             sourceAsset={sourceAsset}
-            onOpenChange={(open) => { if (!open) setSelectedAssetId(null) }}
+            sourceLoading={sourceLoading}
+            onOpenChange={(open) => { if (!open) closeDetail() }}
             onEdit={(asset) => {
               setEditingAssetId(asset.id)
-              setSelectedAssetId(null)
+              closeDetail()
               window.scrollTo({ top: 0, behavior: "smooth" })
             }}
             onDelete={deleteAsset}
             onToggleFavorite={toggleFavorite}
-            onOpenSource={(asset) => setSelectedAssetId(asset.id)}
+            onOpenSource={openSource}
           />
 
           <SettingsSheet

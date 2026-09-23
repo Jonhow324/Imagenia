@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .provider import FakeImageProvider, ImageProvider
+from .asset_listing import list_asset_rows
 from .jobs import GenerationWorker
 from .settings import ConfigurationUnavailable, ConnectionFailed, OpenAISettings, valid_base_url, valid_model
 from .storage import open_database
@@ -43,7 +44,7 @@ class ImageniaApp:
                         "headers": [(b"content-type", b"image/png" if status == 200 else b"application/json")]})
             await send({"type": "http.response.body", "body": content if status == 200 else b'{"error":{"code":"not_found"}}'})
             return
-        status, payload = await self.test_connection() if method == "POST" and path == "/api/imagenia/settings/openai/test" else self.handle(method, path, body)
+        status, payload = await self.test_connection() if method == "POST" and path == "/api/imagenia/settings/openai/test" else self.handle(method, path, body, scope.get("query_string", b""))
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         await send({
             "type": "http.response.start",
@@ -60,7 +61,7 @@ class ImageniaApp:
             if not message.get("more_body", False):
                 return b"".join(chunks)
 
-    def handle(self, method: str, path: str, body: bytes = b"") -> tuple[int, dict[str, Any]]:
+    def handle(self, method: str, path: str, body: bytes = b"", query: bytes = b"") -> tuple[int, dict[str, Any]]:
         if method == "GET" and path == "/api/imagenia/health":
             return 200, {
                 "status": "ok",
@@ -76,8 +77,11 @@ class ImageniaApp:
         if method == "PUT" and path == "/api/imagenia/settings/openai":
             return self._save_settings(body)
         if method == "GET" and path == "/api/imagenia/assets":
-            rows = self.database.execute("SELECT * FROM image_assets ORDER BY created_at DESC, id DESC LIMIT 30").fetchall()
-            return 200, {"items": [self._asset(row) for row in rows], "next_cursor": None}
+            try:
+                rows, next_cursor = list_asset_rows(self.database, query)
+            except ValueError:
+                return 422, {"error": {"code": "invalid_filter", "message": "Invalid asset filter or cursor"}}
+            return 200, {"items": [self._asset(row) for row in rows], "next_cursor": next_cursor}
         if method == "GET" and path.startswith("/api/imagenia/assets/") and path.count("/") == 4:
             row = self.database.execute("SELECT * FROM image_assets WHERE id=?", (path.rsplit("/", 1)[-1],)).fetchone()
             return (200, self._asset(row)) if row else self._missing()

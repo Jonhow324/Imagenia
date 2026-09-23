@@ -16,7 +16,7 @@ Imagenia 是面向 QwenPaw 2.2.1 的本地 AI 图像工作台。当前仓库包�
 - API Key 配置状态通过同源 HTTP API 读取，且缺失时禁用生成入口；
 - 表单校验与生成任务提交（编辑尚未开放）；
 - `pending`、`running`、`succeeded`、`failed` 任务；
-- 经 Bearer 认证的图片加载、空结果和类型筛选；完整分页与收藏属于后续工单；
+- 经 Bearer 认证的图片加载、游标分页、收藏/类型筛选、空结果和加载更多失败重试；收藏状态修改属于后续工单；
 - 详情 Sheet；收藏、编辑、删除仅提示尚未开放，不修改持久化数据；
 - 成功后刷新并高亮新资产，不自动打开详情。
 
@@ -58,6 +58,12 @@ QwenPaw 管理员可在 iframe 工作台的“配置”中保存或覆盖一份�
 仅点击“测试连接”时后端才以当前生效密钥对当前 `base_url` 的 `GET /models` 发起一次只读认证请求（5 秒超时）；加载和保存配置都不会调用 OpenAI，测试不会请求图像生成。正式宿主中提交生成任务会调用 OpenAI Images API，**可能产生费用**。测试环境使用 fake provider 不会产生费用。
 
 宿主验收：同步完整插件到 QwenPaw 2.2.1 后登录，打开 iframe；分别验证无配置、保存、覆盖、环境变量优先，以及点击测试连接的结果。登出或使登录 token 失效后，确认读取/写入遭宿主拒绝且页面显示安全的登录失效提示；本地 ASGI 测试不模拟宿主鉴权。
+
+## 图片资料库（Issue #6）
+
+`GET /api/imagenia/assets` 默认返回至多 30 条，按 `created_at DESC, id DESC` 排序；返回 `items` 和可为空的 `next_cursor`。将该游标原样传给 `cursor` 查询参数继续加载。`favorite=true` 仅看收藏；`kind=generated|edited` 筛选类型，两者可组合。参数无效时返回 `422`；筛选在后端执行，不仅针对已加载图片。`GET /api/imagenia/assets/{id}` 查询详情，图片字节只通过需要认证的 `GET /api/imagenia/assets/{id}/content` 获取。前端经 Bearer `fetch` 创建临时 object URL，切换筛选、关闭详情、请求失败和卸载时回收 URL；不在图片地址中传入 token。
+
+宿主联调：同步含 `frontend/dist/` 的整个插件并重启；在桌面和窄屏确认 30 张以上的“加载更多”、仅收藏与类型组合筛选、空库及筛选无结果；打开生成/编辑资产详情并追溯不在当前页的直接来源；切断网络验证加载更多错误与重试；退出登录或使 token 失效验证图片请求 401 提示，检查浏览器 Network 中 URL 无 token，并在切换筛选/关闭详情后检查 object URL 清理。收藏、删除、编辑动作仍留待后续工单，宿主验证前不要关闭 #6。
 
 ## 生成链路（Issue #5）
 

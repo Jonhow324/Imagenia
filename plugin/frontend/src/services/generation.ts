@@ -47,21 +47,59 @@ export async function listJobs(): Promise<GenerationJob[]> {
     resultAssetId: job.result_asset_id ?? undefined }))
 }
 
-export async function listAssets(): Promise<ImageAsset[]> {
-  const data = await request<{ items: AssetResource[] }>("/assets")
-  return Promise.all(data.items.map(async (asset) => ({
-    id: asset.id, kind: asset.kind, prompt: asset.prompt, model: asset.model,
-    size: asset.size, dimensions: `${asset.width} × ${asset.height}`,
-    createdAt: asset.created_at, isFavorite: asset.is_favorite,
-    sourceAssetId: asset.source_asset_id ?? undefined,
-    imageUrl: await imageUrl(asset.id), accent: "#64748b",
-  })))
+export interface AssetPage {
+  items: ImageAsset[]
+  nextCursor: string | null
 }
 
-async function imageUrl(id: string): Promise<string> {
-  const response = await authenticatedFetch(`/assets/${encodeURIComponent(id)}/content`)
+export interface AssetFilters {
+  favorite?: boolean
+  kind?: "all" | ImageAsset["kind"]
+  cursor?: string | null
+  signal?: AbortSignal
+}
+
+function mapAsset(asset: AssetResource, url: string): ImageAsset {
+  return { id: asset.id, kind: asset.kind, prompt: asset.prompt, model: asset.model,
+    size: asset.size, dimensions: `${asset.width} × ${asset.height}`,
+    createdAt: asset.created_at, isFavorite: asset.is_favorite,
+    sourceAssetId: asset.source_asset_id ?? undefined, imageUrl: url, accent: "#64748b" }
+}
+
+/** A failed page never leaks URLs that finished loading before the failure. */
+export async function listAssetPage(filters: AssetFilters = {}): Promise<AssetPage> {
+  const params = new URLSearchParams()
+  if (filters.favorite) params.set("favorite", "true")
+  if (filters.kind && filters.kind !== "all") params.set("kind", filters.kind)
+  if (filters.cursor) params.set("cursor", filters.cursor)
+  const path = `/assets${params.size ? `?${params}` : ""}`
+  const data = await request<{ items: AssetResource[]; next_cursor: string | null }>(path, { signal: filters.signal })
+  const loaded = await Promise.allSettled(data.items.map(async (asset) =>
+    mapAsset(asset, await imageUrl(asset.id, filters.signal))))
+  const failed = loaded.find((result) => result.status === "rejected")
+  if (failed || filters.signal?.aborted) {
+    for (const result of loaded) if (result.status === "fulfilled") URL.revokeObjectURL(result.value.imageUrl)
+    throw failed && failed.status === "rejected" ? failed.reason : new SettingsRequestError("cancelled", "图片加载已取消。")
+  }
+  return { items: loaded.map((result) => (result as PromiseFulfilledResult<ImageAsset>).value),
+    nextCursor: data.next_cursor ?? null }
+}
+
+export async function listAssets(): Promise<ImageAsset[]> {
+  return (await listAssetPage()).items
+}
+
+export async function getAsset(id: string, signal?: AbortSignal): Promise<ImageAsset> {
+  const resource = await request<AssetResource>(`/assets/${encodeURIComponent(id)}`, { signal })
+  return mapAsset(resource, await imageUrl(resource.id, signal))
+}
+
+async function imageUrl(id: string, signal?: AbortSignal): Promise<string> {
+  const response = await authenticatedFetch(`/assets/${encodeURIComponent(id)}/content`, { signal })
   if (!response.ok || !(response.headers.get("content-type") ?? "").startsWith("image/png")) {
     throw new SettingsRequestError("image_unavailable", "图片暂时无法加载。")
   }
-  return URL.createObjectURL(await response.blob())
+  const blob = await response.blob()
+  if (signal?.aborted) throw new SettingsRequestError("cancelled", "图片加载已取消。")
+  return URL.createObjectURL(blob)
 }

@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run typecheck && vite build && vite build --config vite.host.config.ts && npm run test:build && npm run test:settings && npm run test:generation",
+    "build": "npm run typecheck && vite build && vite build --config vite.host.config.ts && npm run test:build && npm run test:settings && npm run test:generation && npm run test:library",
     "typecheck": "tsc --noEmit -p tsconfig.app.json --pretty false && tsc --noEmit -p tsconfig.node.json --pretty false",
     "preview": "vite preview",
     "test:build": "node tests/build.test.mjs",
     "test:settings": "node --experimental-strip-types tests/settings.test.mjs",
-    "test:generation": "node --experimental-strip-types tests/generation.test.mjs"
+    "test:generation": "node --experimental-strip-types tests/generation.test.mjs",
+    "test:library": "node --experimental-strip-types tests/library.test.mjs"
   },
   "devDependencies": {
     "@types/node": "latest",

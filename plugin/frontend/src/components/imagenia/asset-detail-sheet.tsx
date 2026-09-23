@@ -20,6 +20,7 @@ export function AssetDetailSheet({
   asset,
   open,
   sourceAsset,
+  sourceLoading,
   onOpenChange,
   onEdit,
   onDelete,
@@ -29,6 +30,7 @@ export function AssetDetailSheet({
   asset: ImageAsset | null
   open: boolean
   sourceAsset: ImageAsset | null
+  sourceLoading: boolean
   onOpenChange: (open: boolean) => void
   onEdit: (asset: ImageAsset) => void
   onDelete: (asset: ImageAsset) => void
@@ -77,7 +79,7 @@ export function AssetDetailSheet({
                   <span className="line-clamp-2 text-sm">{sourceAsset.prompt}</span>
                 </button>
               ) : (
-                <p className="text-sm text-muted-foreground">来源图片已被删除。</p>
+                <p className="text-sm text-muted-foreground">{sourceLoading ? "正在加载来源图片…" : "来源图片不可用或已被删除。"}</p>
               )}
             </section>
           ) : null}

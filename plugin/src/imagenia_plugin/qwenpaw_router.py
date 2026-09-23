@@ -36,8 +36,8 @@ def build_router(app: ImageniaApp) -> APIRouter:
         return JSONResponse(payload, status_code=status)
 
     @router.api_route("/assets", methods=["GET"])
-    async def assets() -> JSONResponse:
-        status, payload = app.handle("GET", "/api/imagenia/assets")
+    async def assets(request: Request) -> JSONResponse:
+        status, payload = app.handle("GET", "/api/imagenia/assets", query=request.scope.get("query_string", b""))
         return JSONResponse(payload, status_code=status)
 
     @router.api_route("/jobs", methods=["GET"])

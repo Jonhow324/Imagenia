@@ -13,6 +13,7 @@ export function AssetWaterfall({
   filtered,
   highlightedAssetId,
   isLoading,
+  isLoadingMore,
   hasMore,
   loadMoreError,
   onLoadMore,
@@ -24,6 +25,7 @@ export function AssetWaterfall({
   filtered: boolean
   highlightedAssetId: string | null
   isLoading: boolean
+  isLoadingMore: boolean
   hasMore: boolean
   loadMoreError: boolean
   onLoadMore: () => void
@@ -45,7 +47,7 @@ export function AssetWaterfall({
     )
   }
 
-  if (assets.length === 0) {
+  if (assets.length === 0 && !hasMore) {
     return <EmptyLibrary filtered={filtered} onReset={onResetFilters} />
   }
 
@@ -71,9 +73,9 @@ export function AssetWaterfall({
       ) : null}
       {hasMore ? (
         <div className="mt-5 flex justify-center">
-          <Button variant="outline" onClick={onLoadMore}>
-            {loadMoreError ? "重新加载" : "加载更多"}
-            {!loadMoreError ? <Loader2Icon className="opacity-60" aria-hidden="true" /> : null}
+          <Button variant="outline" onClick={onLoadMore} disabled={isLoadingMore}>
+            {isLoadingMore ? "正在加载…" : loadMoreError ? "重新加载" : "加载更多"}
+            {isLoadingMore ? <Loader2Icon className="animate-spin opacity-60" aria-hidden="true" /> : null}
           </Button>
         </div>
       ) : null}
