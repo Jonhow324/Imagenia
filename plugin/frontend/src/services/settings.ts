@@ -47,6 +47,9 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
       queue_full: "任务排队已满，请稍后再试。",
       invalid_options: "请选择受支持的画幅和质量。",
       invalid_prompt: "请输入有效的提示词。",
+      invalid_input: "请选择一张有效的来源图片。",
+      not_found: "来源图片已不存在或无法访问，请重新选择。",
+      source_unavailable: "来源图片已不可用，请重新选择。",
     }
     throw new SettingsRequestError(code, messages[code] ?? "请求未完成，请稍后重试。")
   }

@@ -15,6 +15,24 @@ from .settings import DEFAULT_MODEL
 from .storage import open_database
 
 
+def source_image(db: sqlite3.Connection, data_dir: Path, asset_id: str) -> bytes:
+    """Read a current, plugin-owned PNG; never trust a persisted path blindly."""
+    row = db.execute("SELECT file_path FROM image_assets WHERE id=?", (asset_id,)).fetchone()
+    if row is None:
+        raise ProviderError("source_unavailable")
+    try:
+        root = (data_dir / "images").resolve()
+        path = (data_dir / row["file_path"]).resolve()
+        if not path.is_relative_to(root) or path.suffix != ".png" or path.stat().st_size > 25 * 1024 * 1024:
+            raise ProviderError("source_unavailable")
+        content = path.read_bytes()
+        if len(content) > 25 * 1024 * 1024 or content[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR":
+            raise ProviderError("source_unavailable")
+        return content
+    except OSError:
+        raise ProviderError("source_unavailable") from None
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -63,7 +81,7 @@ class GenerationWorker:
         try:
             with db:
                 db.execute("BEGIN IMMEDIATE")
-                job = db.execute("""SELECT id, prompt, request_json FROM generation_jobs
+                job = db.execute("""SELECT id, kind, source_asset_id, prompt, request_json FROM generation_jobs
                     WHERE status='pending' ORDER BY created_at, id LIMIT 1""").fetchone()
                 if job is None:
                     return False
@@ -72,7 +90,11 @@ class GenerationWorker:
                 options = json.loads(job["request_json"])
                 active_model = getattr(self.provider, "model", DEFAULT_MODEL)
                 active_model = active_model() if callable(active_model) else active_model
-                content = self.provider.generate(job["prompt"], size=options["size"], quality=options["quality"])
+                if job["kind"] == "edit":
+                    source = source_image(db, self.data_dir, job["source_asset_id"])
+                    content = self.provider.edit(job["prompt"], source, size=options["size"], quality=options["quality"])
+                else:
+                    content = self.provider.generate(job["prompt"], size=options["size"], quality=options["quality"])
                 if not isinstance(content, bytes) or len(content) > 25 * 1024 * 1024 or len(content) < 24 or content[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR":
                     raise ProviderError("invalid_image")
                 width, height = struct.unpack(">II", content[16:24])
@@ -92,8 +114,9 @@ class GenerationWorker:
                         db.execute("""INSERT INTO image_assets
                             (id,kind,source_asset_id,prompt,model,size,quality,width,height,file_path,
                             mime_type,file_size,created_at,updated_at)
-                            VALUES (?,'generated',NULL,?,?,?,?,?,?,?,'image/png',?,?,?)""",
-                            (asset_id, job["prompt"], active_model, options["size"], options["quality"], width, height,
+                            VALUES (?,?,?,?,?,?,?,?,?,?,'image/png',?,?,?)""",
+                            (asset_id, "edited" if job["kind"] == "edit" else "generated", job["source_asset_id"],
+                             job["prompt"], active_model, options["size"], options["quality"], width, height,
                              relative, len(content), timestamp, timestamp))
                         db.execute("""UPDATE generation_jobs SET status='succeeded', result_asset_id=?,
                             finished_at=?, request_json=NULL WHERE id=?""", (asset_id, timestamp, job["id"]))
@@ -102,9 +125,9 @@ class GenerationWorker:
                     raise
             except Exception as exc:
                 code = exc.code if isinstance(exc, ProviderError) and exc.code in {
-                    "not_configured", "invalid_api_key", "invalid_image"} else "service_unavailable"
+                    "not_configured", "invalid_api_key", "invalid_image", "source_unavailable"} else "service_unavailable"
                 messages = {"not_configured": "请先配置 API Key。", "invalid_api_key": "API Key 无效，请检查配置。",
-                            "invalid_image": "服务返回的图片无效，请重新提交。", "service_unavailable": "图像服务暂时不可用，请稍后重新提交。"}
+                            "invalid_image": "服务返回的图片无效，请重新提交。", "source_unavailable": "来源图片已不可用，请重新选择。", "service_unavailable": "图像服务暂时不可用，请稍后重新提交。"}
                 with db:
                     db.execute("""UPDATE generation_jobs SET status='failed', error_code=?, error_message=?,
                         finished_at=?, request_json=NULL WHERE id=?""", (code, messages[code], now(), job["id"]))

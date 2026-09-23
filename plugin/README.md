@@ -1,6 +1,6 @@
 # Imagenia QwenPaw 插件
 
-Imagenia 是面向 QwenPaw 2.2.1 的本地 AI 图像工作台。当前仓库包含已经通过真实宿主验证的插件骨架，以及 React + Vite + Tailwind CSS + shadcn/ui 工作台。配置及生成任务链路已接入插件 HTTP API；收藏、删除与编辑将在后续工单实现。
+Imagenia 是面向 QwenPaw 2.2.1 的本地 AI 图像工作台。当前仓库包含已经通过真实宿主验证的插件骨架，以及 React + Vite + Tailwind CSS + shadcn/ui 工作台。配置、生成和基于已有图片的编辑任务已接入插件 HTTP API；收藏和删除将在后续工单实现。
 
 ## 前端工作台
 
@@ -9,15 +9,15 @@ Imagenia 是面向 QwenPaw 2.2.1 的本地 AI 图像工作台。当前仓库包�
 - `plugin/frontend/dist/index.js`：不引入工作台或第三方运行时的宿主薄入口。宿主通过 Blob `import()` 加载它，它使用 `window.QwenPaw.host.React` 注册 `/imagenia` 路由与侧边栏菜单，并渲染 iframe。
 - `plugin/frontend/dist/app/index.html` 和 `assets/`：同源 iframe 中的独立 SPA，包含自己的 React/ReactDOM、shadcn/Radix、Tailwind CSS 和字体；静态资源使用相对路径，不与宿主共享 React dispatcher。入口 URL 为 `/api/frontend_plugin/imagenia/files/frontend/dist/app/index.html`。
 
-`plugin.json` 仍以 `frontend/dist/index.js` 为插件入口。不要把工作台组件导入宿主入口，也不要将 iframe SPA 的 React 设为 external。当前 iframe 从同源插件 API 读取和保存全局 OpenAI 配置，使用 QwenPaw 2.2.1 的 `qwenpaw_auth_token` 发送 Bearer 认证；图片与任务使用后端资源；收藏、删除、编辑尚未开放。宿主联调还需验证实际 iframe 的读写鉴权与 401 反馈。
+`plugin.json` 仍以 `frontend/dist/index.js` 为插件入口。不要把工作台组件导入宿主入口，也不要将 iframe SPA 的 React 设为 external。当前 iframe 从同源插件 API 读取和保存全局 OpenAI 配置，使用 QwenPaw 2.2.1 的 `qwenpaw_auth_token` 发送 Bearer 认证；图片与任务使用后端资源；收藏、删除尚未开放。宿主联调还需验证实际 iframe 的读写鉴权与 401 反馈。
 
 工作台沿用原型组件；生成表单、任务、图片资料库已接入真实后端：
 
 - API Key 配置状态通过同源 HTTP API 读取，且缺失时禁用生成入口；
-- 表单校验与生成任务提交（编辑尚未开放）；
+- 表单校验与生成、编辑任务提交；
 - `pending`、`running`、`succeeded`、`failed` 任务；
 - 经 Bearer 认证的图片加载、游标分页、收藏/类型筛选、空结果和加载更多失败重试；收藏状态修改属于后续工单；
-- 详情 Sheet；收藏、编辑、删除仅提示尚未开放，不修改持久化数据；
+- 详情 Sheet；从详情进入图片编辑、追溯直接来源；收藏和删除仍未开放；
 - 成功后刷新并高亮新资产，不自动打开详情。
 
 本地预览：
@@ -63,12 +63,18 @@ QwenPaw 管理员可在 iframe 工作台的“配置”中保存或覆盖一份�
 
 `GET /api/imagenia/assets` 默认返回至多 30 条，可用 `limit=1..100` 指定每页大小，按 `created_at DESC, id DESC` 排序；返回 `items` 和可为空的 `next_cursor`。将该游标原样传给 `cursor` 查询参数继续加载；`cursor=` 或 `cursor=null` 等同首次请求，其余非法游标仍返回 `422`。`favorite=true` 仅看收藏；`kind=generated|edited` 筛选类型，两者可组合。参数无效时返回 `422`；筛选在后端执行，不仅针对已加载图片。`GET /api/imagenia/assets/{id}` 查询详情，图片字节只通过需要认证的 `GET /api/imagenia/assets/{id}/content` 获取。前端经 Bearer `fetch` 创建临时 object URL，切换筛选、关闭详情、请求失败和卸载时回收 URL；不在图片地址中传入 token。
 
-宿主联调：同步含 `frontend/dist/` 的整个插件并重启；在桌面和窄屏确认 30 张以上的“加载更多”、仅收藏与类型组合筛选、空库及筛选无结果；打开生成/编辑资产详情并追溯不在当前页的直接来源；切断网络验证加载更多错误与重试；退出登录或使 token 失效验证图片请求 401 提示，检查浏览器 Network 中 URL 无 token，并在切换筛选/关闭详情后检查 object URL 清理。收藏、删除、编辑动作仍留待后续工单，宿主验证前不要关闭 #6。
+宿主联调：同步含 `frontend/dist/` 的整个插件并重启；在桌面和窄屏确认 30 张以上的“加载更多”、仅收藏与类型组合筛选、空库及筛选无结果；打开生成/编辑资产详情并追溯不在当前页的直接来源；切断网络验证加载更多错误与重试；退出登录或使 token 失效验证图片请求 401 提示，检查浏览器 Network 中 URL 无 token，并在切换筛选/关闭详情后检查 object URL 清理。收藏和删除动作留待后续工单；编辑的宿主验收见下文。
 
 ## 生成链路（Issue #5）
 
 生成提交 `POST /api/imagenia/jobs/generate` 返回 `202` 与 `job_id`；后台独立单 worker 将任务从 `pending` 处理到 `running`、`succeeded` 或 `failed`，前端每 1.5 秒通过 `GET /api/imagenia/jobs/{job_id}` 轮询。重新打开页面时通过 `GET /api/imagenia/jobs` 恢复近期任务。成功后从 `GET /api/imagenia/assets` 刷新资料库，图片字节从需要同一 Bearer token 的 `/api/imagenia/assets/{id}/content` 获取；新资产高亮、不自动弹详情。资产文件按年月与 UUID 保存在插件数据目录，元数据在 SQLite 中。上次运行遗留的 `running` 标记为 `interrupted`，`pending` 恢复执行。队列最多允许 50 个待处理任务。
 
-正式宿主默认模型固定为 `gpt-image-1`，画幅分别映射 1024×1024、1536×1024、1024×1536；质量 `standard` 映射 OpenAI 的 `medium`，`high` 对应 `high`。生成调用可能收费，请使用可用密钥和低成本提示词谨慎验证。端到端验收需在 QwenPaw iframe 验证任务提交、轮询、重启恢复、图片展示及登录失效后的安全反馈；本机自动化不代表宿主验收完成。
+正式宿主使用配置的默认模型（当前默认 `gpt-image-2.5`），画幅分别映射 1024×1024、1536×1024、1024×1536；质量 `standard` 映射 OpenAI 的 `medium`，`high` 对应 `high`。生成调用可能收费，请使用可用密钥和低成本提示词谨慎验证。端到端验收需在 QwenPaw iframe 验证任务提交、轮询、重启恢复、图片展示及登录失效后的安全反馈；本机自动化不代表宿主验收完成。
 
 接入兼容网关时请填写 API 根地址（包含 `/v1` 等必要前缀），不要填写 `/images/generations` 完整接口路径。连接测试仅能检验 `/models` 的认证，不保证网关支持图像生成；真实成功生图与计费行为需在宿主手动确认。
+
+## 图片编辑与来源关系（Issue #7）
+
+从图片详情选择“以此编辑”会单独读取已有源图，提交 `POST /api/imagenia/jobs/edit`（`source_asset_id`、`prompt`、`size`、`quality`），返回 `202` 与 `job_id`。只接受插件已有且可读取的 PNG 资产，不接受上传、蒙版、多图、请求指定模型或任意文件路径。编辑复用单 worker 和状态轮询，provider 以 multipart/form-data 将原图发至配置的 `/images/edits`；正式调用可能产生费用。完成后新建 `kind=edited` 资产并保存直接 `source_asset_id`，原图与其文件保持不变。来源缺失时提交返回安全的 404；排队后来源消失则任务安全失败且不生成资产。编辑来源缩略图有独立临时 URL，关闭编辑或卸载时回收。
+
+本地 `python -m pytest plugin/tests -q` 覆盖成功、失败、原图保留、来源关系及无网络 multipart 请求。宿主验证时同步整个插件（含 `frontend/dist/`）并重启：从详情编辑已有图片，检查编辑任务状态、新资产、直接来源和原图未变；对已删除/不可读来源、失效登录和 provider 错误确认安全提示。自动测试不代表真实宿主与网关的编辑端点已验证，验证通过前不要关闭 #7。

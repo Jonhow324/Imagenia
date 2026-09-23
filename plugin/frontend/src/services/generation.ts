@@ -25,9 +25,11 @@ interface AssetResource {
 }
 
 export async function enqueueGeneration(input: GenerateInput): Promise<string> {
-  const response = await request<{ job_id: string; status: "pending" }>("/jobs/generate", {
+  const editing = Boolean(input.sourceAssetId)
+  const response = await request<{ job_id: string; status: "pending" }>(editing ? "/jobs/edit" : "/jobs/generate", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt: input.prompt, size: input.size, quality: input.quality }),
+    body: JSON.stringify({ prompt: input.prompt, size: input.size, quality: input.quality,
+      ...(editing ? { source_asset_id: input.sourceAssetId } : {}) }),
   })
   return response.job_id
 }

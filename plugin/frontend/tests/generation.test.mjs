@@ -30,3 +30,20 @@ test("generation 401 remains safe and does not parse or echo server body", async
   await assert.rejects(getJob("job-1"), err => err.code === "unauthorized" && !String(err).includes("session-secret"))
   await assert.rejects(enqueueGeneration({ prompt: "blue sky", size: "square", quality: "standard" }), err => err.code === "unauthorized" && !String(err).includes("session-secret"))
 })
+
+test("edit submits only the source ID and options, then polls an edit job", async () => {
+  const calls = []
+  globalThis.localStorage = { getItem: () => "session-secret" }
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init })
+    if (url.endsWith("/edit")) return Response.json({ job_id: "edit-1", status: "pending" }, { status: 202 })
+    if (url.endsWith("/jobs/edit-1")) return Response.json({ id: "edit-1", kind: "edit", prompt: "make blue", status: "succeeded", created_at: "now", result_asset_id: "edited-1", error_message: null })
+    throw new Error("unexpected request")
+  }
+  assert.equal(await enqueueGeneration({ prompt: "make blue", sourceAssetId: "source-1", size: "square", quality: "standard" }), "edit-1")
+  const requestBody = JSON.parse(calls[0].init.body)
+  assert.deepEqual(requestBody, { prompt: "make blue", size: "square", quality: "standard", source_asset_id: "source-1" })
+  assert.equal(calls[0].init.headers["Content-Type"], "application/json")
+  assert.equal(calls[0].init.headers.Authorization, "Bearer session-secret")
+  assert.deepEqual(await getJob("edit-1"), { id: "edit-1", kind: "edit", prompt: "make blue", status: "succeeded", createdAt: "now", errorMessage: undefined, resultAssetId: "edited-1" })
+})

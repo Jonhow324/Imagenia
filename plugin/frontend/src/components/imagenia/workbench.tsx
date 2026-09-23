@@ -39,7 +39,9 @@ export function ImageniaWorkbench() {
   const assetUrls = React.useRef<string[]>([])
   const [jobs, setJobs] = React.useState<GenerationJob[]>([])
   const [selectedAssetId, setSelectedAssetId] = React.useState<string | null>(null)
-  const [editingAssetId, setEditingAssetId] = React.useState<string | null>(null)
+  const [editingAsset, setEditingAsset] = React.useState<ImageAsset | null>(null)
+  const editingUrl = React.useRef<string | null>(null)
+  const editController = React.useRef<AbortController | null>(null)
   const [favoriteOnly, setFavoriteOnly] = React.useState(false)
   const [kindFilter, setKindFilter] = React.useState<KindFilter>("all")
   const [settingsStatus, setSettingsStatus] = React.useState<SettingsStatus | null>(null)
@@ -78,7 +80,6 @@ export function ImageniaWorkbench() {
 
   const selectedAsset = assets.find((asset) => asset.id === selectedAssetId)
     ?? (extraDetail?.id === selectedAssetId ? extraDetail : null)
-  const editingAsset = assets.find((asset) => asset.id === editingAssetId) ?? null
   const filtersActive = favoriteOnly || kindFilter !== "all"
 
   React.useEffect(() => {
@@ -164,6 +165,8 @@ export function ImageniaWorkbench() {
   React.useEffect(() => () => {
     pageController.current?.abort()
     sourceNavigation.current?.abort()
+    editController.current?.abort()
+    if (editingUrl.current) URL.revokeObjectURL(editingUrl.current)
     for (const url of assetUrls.current) URL.revokeObjectURL(url)
     assetUrls.current = []
     if (extraUrl.current) URL.revokeObjectURL(extraUrl.current)
@@ -252,17 +255,41 @@ export function ImageniaWorkbench() {
     return () => window.clearInterval(timer)
   }, [jobs])
 
-  async function submitGeneration(input: GenerateInput) {
-    if (input.sourceAssetId) {
-      toast.error("编辑链路尚未开放，请等待后续工单。")
-      return
+  function cancelEdit() {
+    editController.current?.abort()
+    editController.current = null
+    if (editingUrl.current) URL.revokeObjectURL(editingUrl.current)
+    editingUrl.current = null
+    setEditingAsset(null)
+  }
+
+  async function beginEdit(asset: ImageAsset) {
+    cancelEdit()
+    const controller = new AbortController()
+    editController.current = controller
+    try {
+      // Own a separate URL: library refresh and closing a detail can revoke theirs.
+      const detail = await getAsset(asset.id, controller.signal)
+      if (controller.signal.aborted) { URL.revokeObjectURL(detail.imageUrl); return }
+      editingUrl.current = detail.imageUrl
+      setEditingAsset(detail)
+      closeDetail()
+      window.scrollTo({ top: 0, behavior: "smooth" })
+    } catch (cause) {
+      if (!controller.signal.aborted) toast.error(cause instanceof Error ? cause.message : "来源图片无法加载。")
+    } finally {
+      if (editController.current === controller) editController.current = null
     }
+  }
+
+  async function submitGeneration(input: GenerateInput) {
     setIsSubmitting(true)
     try {
       const id = await enqueueGeneration(input)
-      setJobs((current) => [{ id, kind: "generate" as const, prompt: input.prompt, status: "pending" as const,
+      setJobs((current) => [{ id, kind: (input.sourceAssetId ? "edit" : "generate") as GenerationJob["kind"], prompt: input.prompt, status: "pending" as const,
         createdAt: new Date().toISOString() }, ...current])
       toast.info("任务已加入队列")
+      if (input.sourceAssetId) cancelEdit()
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "提交失败，请稍后重试。")
     } finally { setIsSubmitting(false) }
@@ -326,7 +353,7 @@ export function ImageniaWorkbench() {
                   configured={configured}
                   editingAsset={editingAsset}
                   isSubmitting={isSubmitting}
-                  onCancelEdit={() => setEditingAssetId(null)}
+                  onCancelEdit={cancelEdit}
                   onSubmit={submitGeneration}
                 />
 
@@ -402,11 +429,7 @@ export function ImageniaWorkbench() {
             sourceAsset={sourceAsset}
             sourceLoading={sourceLoading}
             onOpenChange={(open) => { if (!open) closeDetail() }}
-            onEdit={(asset) => {
-              setEditingAssetId(asset.id)
-              closeDetail()
-              window.scrollTo({ top: 0, behavior: "smooth" })
-            }}
+            onEdit={beginEdit}
             onDelete={deleteAsset}
             onToggleFavorite={toggleFavorite}
             onOpenSource={openSource}

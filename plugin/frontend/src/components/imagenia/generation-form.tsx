@@ -38,6 +38,11 @@ export function GenerationForm({
       setPrompt(`以这张图片为基础，${editingAsset.prompt}`)
       setSize(editingAsset.size)
       setError("")
+    } else {
+      setPrompt("")
+      setSize("square")
+      setQuality("standard")
+      setError("")
     }
   }, [editingAsset])
 

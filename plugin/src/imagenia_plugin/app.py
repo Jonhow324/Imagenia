@@ -13,9 +13,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from .provider import FakeImageProvider, ImageProvider
+from .provider import FakeImageProvider, ImageProvider, ProviderError
 from .asset_listing import list_asset_rows
-from .jobs import GenerationWorker
+from .jobs import GenerationWorker, source_image
 from .settings import ConfigurationUnavailable, ConnectionFailed, OpenAISettings, valid_base_url, valid_model
 from .storage import open_database
 
@@ -114,15 +114,9 @@ class ImageniaApp:
                 "error_message": row["error_message"]}
 
     def asset_content(self, asset_id: str) -> tuple[int, bytes]:
-        row = self.database.execute("SELECT file_path FROM image_assets WHERE id=?", (asset_id,)).fetchone()
-        if row is None:
-            return 404, b""
         try:
-            path = (self.data_dir / row["file_path"]).resolve()
-            if not path.is_relative_to(self.image_dir.resolve()) or path.suffix != ".png":
-                return 404, b""
-            return 200, path.read_bytes()
-        except OSError:
+            return 200, source_image(self.database, self.data_dir, asset_id)
+        except ProviderError:
             return 404, b""
 
     def _settings_unavailable(self) -> tuple[int, dict[str, Any]]:
@@ -166,8 +160,7 @@ class ImageniaApp:
             return 502, {"error": {"code": "service_unavailable", "message": "Connection test failed"}}
 
     def _create_job(self, path: str, body: bytes) -> tuple[int, dict[str, Any]]:
-        if path.endswith("/edit"):
-            return 501, {"error": {"code": "not_implemented", "message": "Editing is not available yet"}}
+        editing = path.endswith("/edit")
         try:
             request = json.loads(body or b"{}")
         except (ValueError, UnicodeDecodeError):
@@ -178,8 +171,15 @@ class ImageniaApp:
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 4000:
             return 422, {"error": {"code": "invalid_prompt", "message": "A prompt is required"}}
         size, quality = request.get("size", "square"), request.get("quality", "standard")
-        if size not in ("square", "landscape", "portrait") or quality not in ("standard", "high") or "model" in request:
+        allowed = {"prompt", "size", "quality", "source_asset_id"} if editing else {"prompt", "size", "quality"}
+        if size not in ("square", "landscape", "portrait") or quality not in ("standard", "high") or set(request) - allowed:
             return 422, {"error": {"code": "invalid_options", "message": "Unsupported size, quality or model"}}
+        source_id = request.get("source_asset_id") if editing else None
+        if editing:
+            if not isinstance(source_id, str) or not source_id.strip() or len(source_id) > 128:
+                return 422, {"error": {"code": "invalid_input", "message": "A source asset is required"}}
+            if self.asset_content(source_id)[0] != 200:
+                return self._missing()
         try:
             if not self.settings.status()["openai"]["configured"]:
                 return 409, {"error": {"code": "not_configured", "message": "Configure an API key first"}}
@@ -190,8 +190,9 @@ class ImageniaApp:
         job_id = str(uuid.uuid4())
         self.database.execute("""INSERT INTO generation_jobs
             (id, kind, status, prompt, source_asset_id, request_json, created_at)
-            VALUES (?, 'generate', 'pending', ?, NULL, ?, ?)""",
-            (job_id, prompt.strip(), json.dumps({"size": size, "quality": quality}), datetime.now(UTC).isoformat()))
+            VALUES (?, ?, 'pending', ?, ?, ?, ?)""",
+            (job_id, "edit" if editing else "generate", prompt.strip(), source_id,
+             json.dumps({"size": size, "quality": quality}), datetime.now(UTC).isoformat()))
         self.database.commit()
         return 202, {"job_id": job_id, "status": "pending"}
 

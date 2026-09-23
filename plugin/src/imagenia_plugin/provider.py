@@ -7,6 +7,7 @@ import binascii
 import json
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
@@ -21,6 +22,7 @@ class ProviderError(Exception):
 
 class ImageProvider(Protocol):
     def generate(self, prompt: str, *, size: str, quality: str) -> bytes: ...
+    def edit(self, prompt: str, source: bytes, *, size: str, quality: str) -> bytes: ...
 
 
 class OpenAIImageProvider:
@@ -60,6 +62,38 @@ class OpenAIImageProvider:
                 ValueError, TypeError, binascii.Error):
             raise ProviderError("service_unavailable") from None
 
+    def edit(self, prompt: str, source: bytes, *, size: str, quality: str) -> bytes:
+        key = self.key_lookup()
+        if not key:
+            raise ProviderError("not_configured")
+        base_url = self.base_url() if callable(self.base_url) else self.base_url
+        model = self.model() if callable(self.model) else self.model
+        boundary = f"imagenia-{uuid.uuid4().hex}"
+        body = bytearray()
+        for name, value in (("model", model), ("prompt", prompt),
+                            ("size", self.dimensions[size]), ("quality", self.qualities[quality]),
+                            ("n", "1")):
+            body.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+            body.extend(value.encode("utf-8"))
+            body.extend(b"\r\n")
+        body.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="image"; filename="source.png"\r\nContent-Type: image/png\r\n\r\n'.encode())
+        body.extend(source)
+        body.extend(f"\r\n--{boundary}--\r\n".encode())
+        request = urllib.request.Request(
+            f"{base_url.rstrip('/')}/images/edits", data=bytes(body),
+            headers={"Authorization": f"Bearer {key}", "Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=570) as response:
+                payload = json.load(response)
+            return base64.b64decode(payload["data"][0]["b64_json"], validate=True)
+        except urllib.error.HTTPError as exc:
+            raise ProviderError("invalid_api_key" if exc.code in (401, 403) else "service_unavailable") from None
+        except (urllib.error.URLError, TimeoutError, OSError, KeyError, IndexError,
+                ValueError, TypeError, binascii.Error):
+            raise ProviderError("service_unavailable") from None
+
 
 @dataclass
 class FakeImageProvider:
@@ -75,5 +109,9 @@ class FakeImageProvider:
     )
 
     def generate(self, prompt: str, *, size: str, quality: str) -> bytes:
+        self.calls += 1
+        return self.image_bytes
+
+    def edit(self, prompt: str, source: bytes, *, size: str, quality: str) -> bytes:
         self.calls += 1
         return self.image_bytes
