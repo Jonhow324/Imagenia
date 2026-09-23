@@ -34,6 +34,18 @@ async def test_keyset_paging_and_filtered_listing_across_insertions(tmp_path, mo
         second = (await http.get("/api/imagenia/assets", params={"cursor": first["next_cursor"]})).json()
         assert [item["id"] for item in second["items"]] == [row["id"] for row in rows[30:]]
         assert second["next_cursor"] is None
+        short = (await http.get("/api/imagenia/assets", params={"limit": "2"})).json()
+        assert [item["id"] for item in short["items"]] == [row["id"] for row in app.database.execute(
+            "SELECT id FROM image_assets ORDER BY created_at DESC, id DESC LIMIT 2")]
+        assert short["next_cursor"]
+        full = (await http.get("/api/imagenia/assets", params={"limit": "100"})).json()
+        assert len(full["items"]) == 36 and full["next_cursor"] is None
+        short_next = (await http.get("/api/imagenia/assets", params={"limit": "2", "cursor": short["next_cursor"]})).json()
+        assert len(short_next["items"]) == 2
+        assert not {item["id"] for item in short["items"]} & {item["id"] for item in short_next["items"]}
+        baseline = (await http.get("/api/imagenia/assets", params={"limit": "2"})).json()
+        for cursor in ("", "null"):
+            assert (await http.get("/api/imagenia/assets", params={"limit": "2", "cursor": cursor})).json() == baseline
         favorites = (await http.get("/api/imagenia/assets", params={"favorite": "true"})).json()
         assert len(favorites["items"]) == 18 and all(item["is_favorite"] for item in favorites["items"])
         edited = (await http.get("/api/imagenia/assets", params={"kind": "edited", "favorite": "true"})).json()
@@ -45,7 +57,8 @@ async def test_keyset_paging_and_filtered_listing_across_insertions(tmp_path, mo
 async def test_invalid_filters_and_cursors_never_echo_input_or_execute_sql(tmp_path):
     app = create_app(tmp_path / "data", provider=FakeImageProvider())
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
-        for query in ("kind=other", "favorite=1", "cursor=secret-key", "cursor=", "kind=generated&kind=edited",
+        for query in ("kind=other", "favorite=1", "cursor=secret-key", "limit=0", "limit=200", "limit=abc", "limit=-1",
+                      "limit=2.5", "limit=", "limit=1&limit=2", "kind=generated&kind=edited",
                       "kind=generated%27%20OR%201%3D1", "page=2", "favorite=true&cursor=WzEsMl0"):
             result = await http.get("/api/imagenia/assets?" + query)
             assert result.status_code == 422

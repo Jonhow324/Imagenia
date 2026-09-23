@@ -61,7 +61,7 @@ QwenPaw 管理员可在 iframe 工作台的“配置”中保存或覆盖一份�
 
 ## 图片资料库（Issue #6）
 
-`GET /api/imagenia/assets` 默认返回至多 30 条，按 `created_at DESC, id DESC` 排序；返回 `items` 和可为空的 `next_cursor`。将该游标原样传给 `cursor` 查询参数继续加载。`favorite=true` 仅看收藏；`kind=generated|edited` 筛选类型，两者可组合。参数无效时返回 `422`；筛选在后端执行，不仅针对已加载图片。`GET /api/imagenia/assets/{id}` 查询详情，图片字节只通过需要认证的 `GET /api/imagenia/assets/{id}/content` 获取。前端经 Bearer `fetch` 创建临时 object URL，切换筛选、关闭详情、请求失败和卸载时回收 URL；不在图片地址中传入 token。
+`GET /api/imagenia/assets` 默认返回至多 30 条，可用 `limit=1..100` 指定每页大小，按 `created_at DESC, id DESC` 排序；返回 `items` 和可为空的 `next_cursor`。将该游标原样传给 `cursor` 查询参数继续加载；`cursor=` 或 `cursor=null` 等同首次请求，其余非法游标仍返回 `422`。`favorite=true` 仅看收藏；`kind=generated|edited` 筛选类型，两者可组合。参数无效时返回 `422`；筛选在后端执行，不仅针对已加载图片。`GET /api/imagenia/assets/{id}` 查询详情，图片字节只通过需要认证的 `GET /api/imagenia/assets/{id}/content` 获取。前端经 Bearer `fetch` 创建临时 object URL，切换筛选、关闭详情、请求失败和卸载时回收 URL；不在图片地址中传入 token。
 
 宿主联调：同步含 `frontend/dist/` 的整个插件并重启；在桌面和窄屏确认 30 张以上的“加载更多”、仅收藏与类型组合筛选、空库及筛选无结果；打开生成/编辑资产详情并追溯不在当前页的直接来源；切断网络验证加载更多错误与重试；退出登录或使 token 失效验证图片请求 401 提示，检查浏览器 Network 中 URL 无 token，并在切换筛选/关闭详情后检查 object URL 清理。收藏、删除、编辑动作仍留待后续工单，宿主验证前不要关闭 #6。
 
