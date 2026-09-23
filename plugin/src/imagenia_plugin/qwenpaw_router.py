@@ -25,6 +25,16 @@ def build_router(app: ImageniaApp) -> APIRouter:
         status, payload = app.handle("GET", "/api/imagenia/settings")
         return JSONResponse(payload, status_code=status)
 
+    @router.api_route("/settings/openai", methods=["PUT"])
+    async def save_settings(request: Request) -> JSONResponse:
+        status, payload = app.handle("PUT", "/api/imagenia/settings/openai", await request.body())
+        return JSONResponse(payload, status_code=status)
+
+    @router.api_route("/settings/openai/test", methods=["POST"])
+    async def test_connection() -> JSONResponse:
+        status, payload = await app.test_connection()
+        return JSONResponse(payload, status_code=status)
+
     @router.api_route("/assets", methods=["GET"])
     async def assets() -> JSONResponse:
         status, payload = app.handle("GET", "/api/imagenia/assets")

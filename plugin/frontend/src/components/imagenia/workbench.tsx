@@ -1,9 +1,7 @@
 import * as React from "react"
 import {
-  CheckCircle2Icon,
   HeartIcon,
   ImagesIcon,
-  KeyRoundIcon,
   Settings2Icon,
   SlidersHorizontalIcon,
   SparklesIcon,
@@ -13,21 +11,15 @@ import { toast } from "sonner"
 import { ApiKeyMissingAlert } from "@/components/imagenia/api-key-missing-alert"
 import { AssetDetailSheet } from "@/components/imagenia/asset-detail-sheet"
 import { AssetWaterfall } from "@/components/imagenia/asset-waterfall"
+import { SettingsSheet } from "@/components/imagenia/settings-sheet"
 import { GenerationForm } from "@/components/imagenia/generation-form"
 import { GenerationJobCard } from "@/components/imagenia/generation-job-card"
 import { PortalContainerProvider } from "@/components/imagenia/portal-root"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { getSettings, type SettingsStatus } from "@/services/settings"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Toaster } from "@/components/ui/sonner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -52,7 +44,10 @@ export function ImageniaWorkbench() {
   const [editingAssetId, setEditingAssetId] = React.useState<string | null>(null)
   const [favoriteOnly, setFavoriteOnly] = React.useState(false)
   const [kindFilter, setKindFilter] = React.useState<KindFilter>("all")
-  const [configured, setConfigured] = React.useState(true)
+  const [settingsStatus, setSettingsStatus] = React.useState<SettingsStatus | null>(null)
+  const [settingsError, setSettingsError] = React.useState("")
+  const [settingsLoading, setSettingsLoading] = React.useState(true)
+  const configured = settingsStatus?.openai.configured ?? false
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [isLoading, setIsLoading] = React.useState(true)
@@ -60,6 +55,18 @@ export function ImageniaWorkbench() {
   const [loadMoreError, setLoadMoreError] = React.useState(false)
   const [loadMoreAttempted, setLoadMoreAttempted] = React.useState(false)
   const [highlightedAssetId, setHighlightedAssetId] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    let active = true
+    getSettings().then((result) => {
+      if (active) setSettingsStatus(result)
+    }).catch((cause: unknown) => {
+      if (active) setSettingsError(cause instanceof Error ? cause.message : "无法读取配置。")
+    }).finally(() => {
+      if (active) setSettingsLoading(false)
+    })
+    return () => { active = false }
+  }, [])
 
   React.useEffect(() => {
     const timer = window.setTimeout(() => setIsLoading(false), 550)
@@ -172,7 +179,13 @@ export function ImageniaWorkbench() {
               </div>
             </header>
 
-            {!configured ? (
+            {settingsError ? (
+              <Alert variant="destructive" className="mb-5">
+                <AlertTitle>配置读取失败</AlertTitle>
+                <AlertDescription>{settingsError}</AlertDescription>
+              </Alert>
+            ) : null}
+            {!settingsLoading && !settingsError && !configured ? (
               <div className="mb-5">
                 <ApiKeyMissingAlert onConfigure={() => setSettingsOpen(true)} />
               </div>
@@ -262,45 +275,12 @@ export function ImageniaWorkbench() {
             onOpenSource={(asset) => setSelectedAssetId(asset.id)}
           />
 
-          <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
-            <SheetContent className="sm:max-w-md">
-              <SheetHeader>
-                <SheetTitle>图像服务配置</SheetTitle>
-                <SheetDescription>API Key 由插件后端保存在私有配置文件中，权限为 0600。</SheetDescription>
-              </SheetHeader>
-              <div className="grid gap-5 px-4">
-                <div className="flex items-center gap-3 rounded-xl border bg-muted/30 p-4">
-                  <div className="grid size-10 place-items-center rounded-lg bg-background ring-1 ring-foreground/10">
-                    {configured ? <CheckCircle2Icon className="size-5 text-emerald-600" aria-hidden="true" /> : <KeyRoundIcon className="size-5 text-amber-600" aria-hidden="true" />}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium">{configured ? "OpenAI 已配置" : "尚未配置 API Key"}</p>
-                    <p className="text-xs text-muted-foreground">{configured ? "sk-••••••••••••7K2F" : "生成和编辑功能当前不可用"}</p>
-                  </div>
-                </div>
-                <div className="rounded-xl border p-4">
-                  <p className="text-sm font-medium">默认模型</p>
-                  <p className="mt-1 text-sm text-muted-foreground">gpt-image-1 · 由后端配置，前端不可自由修改</p>
-                </div>
-                <Separator />
-                <p className="text-xs leading-5 text-muted-foreground">这是 Issue #2 的 mock 工作台。按钮只切换本地演示状态，不会发送网络请求或产生费用。</p>
-              </div>
-              <SheetFooter>
-                <Button
-                  variant={configured ? "outline" : "default"}
-                  onClick={() => {
-                    setConfigured((value) => !value)
-                    toast.success(configured ? "已切换到未配置状态" : "Mock API Key 已保存")
-                  }}
-                >
-                  {configured ? "预览未配置状态" : "保存 Mock API Key"}
-                </Button>
-                <Button variant="secondary" disabled={!configured} onClick={() => toast.success("连接测试通过", { description: "后端返回安全的连接状态，不会执行完整生图。" })}>
-                  测试连接
-                </Button>
-              </SheetFooter>
-            </SheetContent>
-          </Sheet>
+          <SettingsSheet
+            open={settingsOpen}
+            onOpenChange={setSettingsOpen}
+            status={settingsStatus}
+            onSaved={(next) => { setSettingsStatus(next); setSettingsError("") }}
+          />
 
           <div ref={setPortalContainer} data-imagenia-portal-root />
           <Toaster position="bottom-right" richColors closeButton />
