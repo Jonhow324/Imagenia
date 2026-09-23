@@ -19,15 +19,12 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { getSettings, type SettingsStatus } from "@/services/settings"
+import { enqueueGeneration, getJob, listAssets, listJobs } from "@/services/generation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Toaster } from "@/components/ui/sonner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import {
-  createMockAsset,
-  createMockJob,
-  initialAssets,
-  initialJobs,
   type AssetKind,
   type GenerateInput,
   type GenerationJob,
@@ -38,8 +35,9 @@ type KindFilter = "all" | AssetKind
 
 export function ImageniaWorkbench() {
   const [portalContainer, setPortalContainer] = React.useState<HTMLDivElement | null>(null)
-  const [assets, setAssets] = React.useState<ImageAsset[]>(initialAssets)
-  const [jobs, setJobs] = React.useState<GenerationJob[]>(initialJobs)
+  const [assets, setAssets] = React.useState<ImageAsset[]>([])
+  const assetUrls = React.useRef<string[]>([])
+  const [jobs, setJobs] = React.useState<GenerationJob[]>([])
   const [selectedAssetId, setSelectedAssetId] = React.useState<string | null>(null)
   const [editingAssetId, setEditingAssetId] = React.useState<string | null>(null)
   const [favoriteOnly, setFavoriteOnly] = React.useState(false)
@@ -51,9 +49,7 @@ export function ImageniaWorkbench() {
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [isLoading, setIsLoading] = React.useState(true)
-  const [visibleCount, setVisibleCount] = React.useState(4)
-  const [loadMoreError, setLoadMoreError] = React.useState(false)
-  const [loadMoreAttempted, setLoadMoreAttempted] = React.useState(false)
+  const [visibleCount, setVisibleCount] = React.useState(30)
   const [highlightedAssetId, setHighlightedAssetId] = React.useState<string | null>(null)
 
   React.useEffect(() => {
@@ -68,10 +64,7 @@ export function ImageniaWorkbench() {
     return () => { active = false }
   }, [])
 
-  React.useEffect(() => {
-    const timer = window.setTimeout(() => setIsLoading(false), 550)
-    return () => window.clearTimeout(timer)
-  }, [])
+
 
   const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? null
   const editingAsset = assets.find((asset) => asset.id === editingAssetId) ?? null
@@ -87,56 +80,87 @@ export function ImageniaWorkbench() {
   const visibleAssets = filteredAssets.slice(0, visibleCount)
   const filtersActive = favoriteOnly || kindFilter !== "all"
 
-  function toggleFavorite(asset: ImageAsset) {
-    const nextValue = !asset.isFavorite
-    setAssets((current) => current.map((item) => item.id === asset.id ? { ...item, isFavorite: nextValue } : item))
-    toast.success(nextValue ? "已加入收藏" : "已取消收藏", {
-      description: nextValue ? "可以通过顶部的收藏筛选快速找到它。" : "图片仍保留在全部作品中。",
+  function toggleFavorite(_asset: ImageAsset) {
+    toast.info("收藏功能尚未开放，请等待后续工单。")
+  }
+
+  function deleteAsset(_asset: ImageAsset) {
+    toast.info("删除功能尚未开放，图片和资产记录未被更改。")
+  }
+
+  function replaceAssets(fresh: ImageAsset[]) {
+    const stale = assetUrls.current
+    assetUrls.current = fresh.map((asset) => asset.imageUrl)
+    setAssets(fresh)
+    window.setTimeout(() => {
+      for (const url of stale) URL.revokeObjectURL(url)
+    }, 1000)
+  }
+
+  async function refreshAssets() {
+    replaceAssets(await listAssets())
+  }
+
+  React.useEffect(() => {
+    let active = true
+    listJobs().then((fresh) => { if (active) setJobs(fresh) }).catch((cause: unknown) => {
+      if (active) setSettingsError(cause instanceof Error ? cause.message : "无法读取任务记录。")
     })
-  }
+    listAssets().then((fresh) => {
+      if (active) replaceAssets(fresh)
+      else for (const asset of fresh) URL.revokeObjectURL(asset.imageUrl)
+    }).catch((cause: unknown) => {
+      if (active) setSettingsError(cause instanceof Error ? cause.message : "无法加载图片资料库。")
+    }).finally(() => { if (active) setIsLoading(false) })
+    return () => {
+      active = false
+      for (const url of assetUrls.current) URL.revokeObjectURL(url)
+      assetUrls.current = []
+    }
+  }, [])
 
-  function deleteAsset(asset: ImageAsset) {
-    setAssets((current) => current
-      .filter((item) => item.id !== asset.id)
-      .map((item) => item.sourceAssetId === asset.id ? { ...item, sourceAssetId: undefined } : item))
-    setSelectedAssetId(null)
-    if (editingAssetId === asset.id) setEditingAssetId(null)
-    toast.success("图片已删除", { description: "本地文件和资产记录已移除。" })
-  }
+  React.useEffect(() => {
+    const activeJobs = jobs.filter((job) => job.status === "pending" || job.status === "running")
+    if (!activeJobs.length) return
+    let polling = false
+    const timer = window.setInterval(async () => {
+      if (polling) return
+      polling = true
+      try {
+        for (const job of activeJobs) {
+          const fresh = await getJob(job.id)
+          if (fresh.status === "succeeded" && fresh.resultAssetId) {
+            await refreshAssets()
+            setHighlightedAssetId(fresh.resultAssetId)
+            window.setTimeout(() => setHighlightedAssetId((id) => id === fresh.resultAssetId ? null : id), 5000)
+            toast.success("图像已完成", { description: "新作品已加入资料库并高亮显示。" })
+          } else if (fresh.status === "failed") {
+            toast.error(fresh.errorMessage ?? "生成失败，请稍后重试。")
+          }
+          setJobs((current) => current.map((item) => item.id === job.id ? fresh : item))
+        }
+      } catch (cause) {
+        setSettingsError(cause instanceof Error ? cause.message : "无法读取任务状态。")
+        window.clearInterval(timer)
+      } finally { polling = false }
+    }, 1500)
+    return () => window.clearInterval(timer)
+  }, [jobs])
 
-  function submitGeneration(input: GenerateInput) {
-    const job = createMockJob(input)
-    setIsSubmitting(true)
-    setJobs((current) => [job, ...current].slice(0, 5))
-
-    window.setTimeout(() => {
-      setIsSubmitting(false)
-      setJobs((current) => current.map((item) => item.id === job.id ? { ...item, status: "running" } : item))
-      toast.info("任务已开始", { description: "工作台会自动轮询进度。" })
-    }, 500)
-
-    window.setTimeout(() => {
-      const asset = createMockAsset(input)
-      setAssets((current) => [asset, ...current])
-      setVisibleCount((count) => Math.max(count + 1, 5))
-      setJobs((current) => current.map((item) => item.id === job.id
-        ? { ...item, status: "succeeded", resultAssetId: asset.id }
-        : item))
-      setEditingAssetId(null)
-      setHighlightedAssetId(asset.id)
-      toast.success("图像已完成", { description: "新作品已加入资料库并高亮显示。" })
-      window.setTimeout(() => setHighlightedAssetId((current) => current === asset.id ? null : current), 5000)
-    }, 2800)
-  }
-
-  function loadMore() {
-    if (!loadMoreAttempted) {
-      setLoadMoreAttempted(true)
-      setLoadMoreError(true)
+  async function submitGeneration(input: GenerateInput) {
+    if (input.sourceAssetId) {
+      toast.error("编辑链路尚未开放，请等待后续工单。")
       return
     }
-    setLoadMoreError(false)
-    setVisibleCount(filteredAssets.length)
+    setIsSubmitting(true)
+    try {
+      const id = await enqueueGeneration(input)
+      setJobs((current) => [{ id, kind: "generate" as const, prompt: input.prompt, status: "pending" as const,
+        createdAt: new Date().toISOString() }, ...current])
+      toast.info("任务已加入队列")
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "提交失败，请稍后重试。")
+    } finally { setIsSubmitting(false) }
   }
 
   function resetFilters() {
@@ -249,9 +273,9 @@ export function ImageniaWorkbench() {
                   filtered={filtersActive}
                   highlightedAssetId={highlightedAssetId}
                   isLoading={isLoading}
-                  hasMore={visibleCount < filteredAssets.length}
-                  loadMoreError={loadMoreError}
-                  onLoadMore={loadMore}
+                  hasMore={false}
+                  loadMoreError={false}
+                  onLoadMore={() => {}}
                   onResetFilters={resetFilters}
                   onOpen={(asset) => setSelectedAssetId(asset.id)}
                   onToggleFavorite={toggleFavorite}

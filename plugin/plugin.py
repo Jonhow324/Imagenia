@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from src.imagenia_plugin import create_app
+from src.imagenia_plugin.provider import OpenAIImageProvider
 
 
 class ImageniaPlugin:
@@ -18,8 +19,12 @@ class ImageniaPlugin:
         self.app = None
 
     def register(self, api: Any) -> None:
+        if self.app is not None:
+            self.app.worker.stop()
         data_dir = Path(os.environ.get("IMAGENIA_DATA_DIR", Path.home() / ".qwenpaw" / "plugins" / "imagenia"))
         self.app = create_app(data_dir)
+        self.app.provider = OpenAIImageProvider(lambda: self.app.settings.current()[0])
+        self.app.worker.provider = self.app.provider
         # QwenPaw mounts APIRouter under /api + prefix. Import FastAPI lazily so
         # the dependency-free HTTP seam remains runnable outside the host.
         from src.imagenia_plugin.qwenpaw_router import build_router
@@ -31,6 +36,13 @@ class ImageniaPlugin:
             prefix="/imagenia",
             tags=["imagenia"],
         )
+        self.app.worker.start()
+
+    def unregister(self) -> None:
+        if self.app is not None:
+            self.app.worker.stop()
+            self.app.database.close()
+            self.app = None
 
 
 plugin = ImageniaPlugin()

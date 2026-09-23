@@ -12,7 +12,8 @@ from src.imagenia_plugin import FakeImageProvider, create_app  # noqa: E402
 
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAGENIA_OPENAI_API_KEY", "sk-test-no-network")
     provider = FakeImageProvider()
     app = create_app(tmp_path / "data", provider=provider)
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test"), provider, tmp_path

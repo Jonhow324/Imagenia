@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .provider import FakeImageProvider, ImageProvider
+from .jobs import GenerationWorker
 from .settings import ConfigurationUnavailable, ConnectionFailed, OpenAISettings
 from .storage import open_database
 
@@ -28,6 +29,7 @@ class ImageniaApp:
         self.database = open_database(self.data_dir)
         self.provider = provider or FakeImageProvider()
         self.settings = OpenAISettings(self.data_dir, connection_probe) if connection_probe else OpenAISettings(self.data_dir)
+        self.worker = GenerationWorker(self.data_dir, self.provider)
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -35,6 +37,12 @@ class ImageniaApp:
         method = scope.get("method", "GET").upper()
         path = scope.get("path", "")
         body = await self._read_body(receive)
+        if method == "GET" and path.startswith("/api/imagenia/assets/") and path.endswith("/content"):
+            status, content = self.asset_content(path.split("/")[-2])
+            await send({"type": "http.response.start", "status": status,
+                        "headers": [(b"content-type", b"image/png" if status == 200 else b"application/json")]})
+            await send({"type": "http.response.body", "body": content if status == 200 else b'{"error":{"code":"not_found"}}'})
+            return
         status, payload = await self.test_connection() if method == "POST" and path == "/api/imagenia/settings/openai/test" else self.handle(method, path, body)
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         await send({
@@ -68,10 +76,50 @@ class ImageniaApp:
         if method == "PUT" and path == "/api/imagenia/settings/openai":
             return self._save_settings(body)
         if method == "GET" and path == "/api/imagenia/assets":
-            return 200, {"items": [], "next_cursor": None}
+            rows = self.database.execute("SELECT * FROM image_assets ORDER BY created_at DESC, id DESC LIMIT 30").fetchall()
+            return 200, {"items": [self._asset(row) for row in rows], "next_cursor": None}
+        if method == "GET" and path.startswith("/api/imagenia/assets/") and path.count("/") == 4:
+            row = self.database.execute("SELECT * FROM image_assets WHERE id=?", (path.rsplit("/", 1)[-1],)).fetchone()
+            return (200, self._asset(row)) if row else self._missing()
+        if method == "GET" and path == "/api/imagenia/jobs":
+            rows = self.database.execute("SELECT * FROM generation_jobs ORDER BY created_at DESC, id DESC LIMIT 100").fetchall()
+            return 200, {"items": [self._job(row) for row in rows]}
+        if method == "GET" and path.startswith("/api/imagenia/jobs/") and path.count("/") == 4:
+            row = self.database.execute("SELECT * FROM generation_jobs WHERE id=?", (path.rsplit("/", 1)[-1],)).fetchone()
+            return (200, self._job(row)) if row else self._missing()
         if method == "POST" and path in {"/api/imagenia/jobs/generate", "/api/imagenia/jobs/edit"}:
             return self._create_job(path, body)
+        return self._missing()
+
+    @staticmethod
+    def _missing() -> tuple[int, dict[str, Any]]:
         return 404, {"error": {"code": "not_found", "message": "Resource not found"}}
+
+    @staticmethod
+    def _asset(row: Any) -> dict[str, Any]:
+        return {"id": row["id"], "kind": row["kind"], "prompt": row["prompt"],
+                "model": row["model"], "size": row["size"], "quality": row["quality"],
+                "width": row["width"], "height": row["height"], "created_at": row["created_at"],
+                "is_favorite": bool(row["is_favorite"]), "source_asset_id": row["source_asset_id"]}
+
+    @staticmethod
+    def _job(row: Any) -> dict[str, Any]:
+        return {"id": row["id"], "kind": row["kind"], "status": row["status"],
+                "prompt": row["prompt"], "created_at": row["created_at"],
+                "result_asset_id": row["result_asset_id"], "error_code": row["error_code"],
+                "error_message": row["error_message"]}
+
+    def asset_content(self, asset_id: str) -> tuple[int, bytes]:
+        row = self.database.execute("SELECT file_path FROM image_assets WHERE id=?", (asset_id,)).fetchone()
+        if row is None:
+            return 404, b""
+        try:
+            path = (self.data_dir / row["file_path"]).resolve()
+            if not path.is_relative_to(self.image_dir.resolve()) or path.suffix != ".png":
+                return 404, b""
+            return 200, path.read_bytes()
+        except OSError:
+            return 404, b""
 
     def _settings_unavailable(self) -> tuple[int, dict[str, Any]]:
         return 503, {"error": {"code": "configuration_unavailable", "message": "Configuration is unavailable"}}
@@ -108,23 +156,32 @@ class ImageniaApp:
             return 502, {"error": {"code": "service_unavailable", "message": "Connection test failed"}}
 
     def _create_job(self, path: str, body: bytes) -> tuple[int, dict[str, Any]]:
+        if path.endswith("/edit"):
+            return 501, {"error": {"code": "not_implemented", "message": "Editing is not available yet"}}
         try:
             request = json.loads(body or b"{}")
-        except json.JSONDecodeError:
+        except (ValueError, UnicodeDecodeError):
             return 400, {"error": {"code": "invalid_json", "message": "Request body must be JSON"}}
+        if not isinstance(request, dict):
+            return 422, {"error": {"code": "invalid_input", "message": "Invalid request"}}
         prompt = request.get("prompt")
-        if not isinstance(prompt, str) or not prompt.strip():
-            return 422, {"error": {"code": "invalid_prompt", "message": "prompt is required"}}
-        size = request.get("size", "square")
-        quality = request.get("quality", "standard")
-        if size not in {"square", "landscape", "portrait"} or quality not in {"standard", "high"}:
-            return 422, {"error": {"code": "invalid_options", "message": "Unsupported size or quality"}}
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 4000:
+            return 422, {"error": {"code": "invalid_prompt", "message": "A prompt is required"}}
+        size, quality = request.get("size", "square"), request.get("quality", "standard")
+        if size not in ("square", "landscape", "portrait") or quality not in ("standard", "high") or "model" in request:
+            return 422, {"error": {"code": "invalid_options", "message": "Unsupported size, quality or model"}}
+        try:
+            if not self.settings.status()["openai"]["configured"]:
+                return 409, {"error": {"code": "not_configured", "message": "Configure an API key first"}}
+        except ConfigurationUnavailable:
+            return self._settings_unavailable()
+        if self.database.execute("SELECT COUNT(*) FROM generation_jobs WHERE status='pending'").fetchone()[0] >= 50:
+            return 429, {"error": {"code": "queue_full", "message": "Queue is full"}}
         job_id = str(uuid.uuid4())
-        kind = "edit" if path.endswith("/edit") else "generate"
-        self.database.execute(
-            "INSERT INTO generation_jobs(id, kind, status, prompt, source_asset_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (job_id, kind, "pending", prompt, request.get("source_asset_id"), datetime.now(UTC).isoformat()),
-        )
+        self.database.execute("""INSERT INTO generation_jobs
+            (id, kind, status, prompt, source_asset_id, request_json, created_at)
+            VALUES (?, 'generate', 'pending', ?, NULL, ?, ?)""",
+            (job_id, prompt.strip(), json.dumps({"size": size, "quality": quality}), datetime.now(UTC).isoformat()))
         self.database.commit()
         return 202, {"job_id": job_id, "status": "pending"}
 
