@@ -8,13 +8,18 @@ QwenPaw or making a provider request.
 from __future__ import annotations
 
 import json
+import logging
+import os
+import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
 from .provider import FakeImageProvider, ImageProvider, ProviderError
+from .private_storage import private_directory, private_images, recover_deleted_images
 from .asset_listing import list_asset_rows
+from .asset_mutations import UnsafeAssetPath, delete_asset, set_favorite
 from .jobs import GenerationWorker, source_image
 from .settings import ConfigurationUnavailable, ConnectionFailed, OpenAISettings, valid_base_url, valid_model
 from .storage import open_database
@@ -24,13 +29,31 @@ class ImageniaApp:
     """Minimal ASGI app and dependency container for the plugin skeleton."""
 
     def __init__(self, data_dir: Path, provider: ImageProvider | None = None, connection_probe: Callable[[str], None] | None = None) -> None:
+        self._thread_probe = os.environ.get("IMAGENIA_THREAD_PROBE") == "1"
+        self._thread_stages: set[tuple[str, int]] = set()
+        self._trace_thread("create")
         self.data_dir = Path(data_dir)
         self.image_dir = self.data_dir / "images"
-        self.image_dir.mkdir(parents=True, exist_ok=True)
+        private_directory(self.data_dir)
+        private_images(self.data_dir)
         self.database = open_database(self.data_dir)
+        try:
+            recover_deleted_images(self.database, self.data_dir)
+        except BaseException:
+            self.database.close()
+            raise
         self.provider = provider or FakeImageProvider()
         self.settings = OpenAISettings(self.data_dir, connection_probe) if connection_probe else OpenAISettings(self.data_dir)
         self.worker = GenerationWorker(self.data_dir, self.provider)
+
+    def _trace_thread(self, stage: str) -> None:
+        """Opt-in host lifecycle evidence; never include prompts or credentials."""
+        if not self._thread_probe:
+            return
+        key = (stage, threading.get_ident())
+        if key not in self._thread_stages:
+            self._thread_stages.add(key)
+            logging.getLogger("imagenia.thread_probe").warning("Imagenia %s thread=%s", *key)
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -62,6 +85,7 @@ class ImageniaApp:
                 return b"".join(chunks)
 
     def handle(self, method: str, path: str, body: bytes = b"", query: bytes = b"") -> tuple[int, dict[str, Any]]:
+        self._trace_thread("handle")
         if method == "GET" and path == "/api/imagenia/health":
             return 200, {
                 "status": "ok",
@@ -82,6 +106,23 @@ class ImageniaApp:
             except ValueError:
                 return 422, {"error": {"code": "invalid_filter", "message": "Invalid asset filter or cursor"}}
             return 200, {"items": [self._asset(row) for row in rows], "next_cursor": next_cursor}
+        if path.startswith("/api/imagenia/assets/") and path.count("/") == 4:
+            asset_id = path.rsplit("/", 1)[-1]
+            if method == "PATCH":
+                try:
+                    change = json.loads(body)
+                except (ValueError, UnicodeDecodeError):
+                    return 400, {"error": {"code": "invalid_json", "message": "Request body must be JSON"}}
+                if not isinstance(change, dict) or set(change) != {"is_favorite"} or type(change["is_favorite"]) is not bool:
+                    return 422, {"error": {"code": "invalid_input", "message": "Expected is_favorite boolean"}}
+                row = set_favorite(self.database, asset_id, change["is_favorite"])
+                return (200, self._asset(row)) if row else self._missing()
+            if method == "DELETE":
+                try:
+                    removed = delete_asset(self.database, self.data_dir, asset_id)
+                except UnsafeAssetPath:
+                    return 409, {"error": {"code": "asset_unavailable", "message": "Asset cannot be safely deleted"}}
+                return (200, {"deleted": True}) if removed else self._missing()
         if method == "GET" and path.startswith("/api/imagenia/assets/") and path.count("/") == 4:
             row = self.database.execute("SELECT * FROM image_assets WHERE id=?", (path.rsplit("/", 1)[-1],)).fetchone()
             return (200, self._asset(row)) if row else self._missing()
@@ -114,6 +155,7 @@ class ImageniaApp:
                 "error_message": row["error_message"]}
 
     def asset_content(self, asset_id: str) -> tuple[int, bytes]:
+        self._trace_thread("content")
         try:
             return 200, source_image(self.database, self.data_dir, asset_id)
         except ProviderError:

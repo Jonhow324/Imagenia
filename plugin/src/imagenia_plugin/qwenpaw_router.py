@@ -55,6 +55,16 @@ def build_router(app: ImageniaApp) -> APIRouter:
         status, payload = app.handle("GET", f"/api/imagenia/assets/{asset_id}")
         return JSONResponse(payload, status_code=status)
 
+    @router.api_route("/assets/{asset_id}", methods=["PATCH"])
+    async def favorite(asset_id: str, request: Request) -> JSONResponse:
+        status, payload = app.handle("PATCH", f"/api/imagenia/assets/{asset_id}", await request.body())
+        return JSONResponse(payload, status_code=status)
+
+    @router.api_route("/assets/{asset_id}", methods=["DELETE"])
+    async def delete(asset_id: str) -> JSONResponse:
+        status, payload = app.handle("DELETE", f"/api/imagenia/assets/{asset_id}")
+        return JSONResponse(payload, status_code=status)
+
     @router.api_route("/assets/{asset_id}/content", methods=["GET"])
     async def asset_content(asset_id: str) -> Response:
         status, content = app.asset_content(asset_id)

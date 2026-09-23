@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import struct
 import threading
@@ -11,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .provider import ImageProvider, ProviderError
+from .private_storage import private_directory
 from .settings import DEFAULT_MODEL
 from .storage import open_database
 
@@ -104,13 +106,19 @@ class GenerationWorker:
                 timestamp = now()
                 date = datetime.now(UTC)
                 directory = self.data_dir / "images" / f"{date:%Y}" / f"{date:%m}"
-                directory.mkdir(parents=True, exist_ok=True)
+                private_directory(directory.parent)
+                private_directory(directory)
                 target = directory / f"{asset_id}.png"
                 relative = target.relative_to(self.data_dir).as_posix()
                 try:
-                    with target.open("xb") as image:
+                    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    with os.fdopen(descriptor, "wb") as image:
                         image.write(content)
                     with db:
+                        current = db.execute("SELECT status FROM generation_jobs WHERE id=?", (job["id"],)).fetchone()
+                        if current is None or current["status"] != "running" or (job["kind"] == "edit" and
+                            db.execute("SELECT 1 FROM image_assets WHERE id=?", (job["source_asset_id"],)).fetchone() is None):
+                            raise ProviderError("source_unavailable")
                         db.execute("""INSERT INTO image_assets
                             (id,kind,source_asset_id,prompt,model,size,quality,width,height,file_path,
                             mime_type,file_size,created_at,updated_at)

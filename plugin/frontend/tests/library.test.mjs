@@ -58,3 +58,23 @@ test("aborted image page revokes completed image URLs", async () => {
   await assert.rejects(listAssetPage({ signal: controller.signal }))
   assert.deepEqual(revoked, []) // abort before createObjectURL: nothing to revoke
 })
+
+test("favorite and deletion send authenticated mutation and preserve safe failures", async () => {
+  const { favoriteAsset, deleteAsset } = await import("../src/services/generation.ts")
+  const { calls } = fixture()
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init })
+    if (init.method === "PATCH") return Response.json({ ...resource("one"), is_favorite: false })
+    if (init.method === "DELETE") return Response.json({ deleted: true })
+    throw Error("unexpected URL")
+  }
+  assert.equal((await favoriteAsset("one", false)).isFavorite, false)
+  await deleteAsset("one")
+  assert.equal(calls[0].init.body, '{"is_favorite":false}')
+  assert.equal(calls[0].init.headers.Authorization, "Bearer private-session")
+  assert.equal(calls[1].init.method, "DELETE")
+  assert.equal(calls[1].init.headers.Authorization, "Bearer private-session")
+  globalThis.fetch = async () => Response.json({ error: { code: "not_found" } }, { status: 404 })
+  await assert.rejects(favoriteAsset("one", true), (error) => error.code === "not_found")
+  await assert.rejects(deleteAsset("one"), (error) => error.code === "not_found")
+})

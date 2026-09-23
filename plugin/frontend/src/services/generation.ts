@@ -105,3 +105,15 @@ async function imageUrl(id: string, signal?: AbortSignal): Promise<string> {
   if (signal?.aborted) throw new SettingsRequestError("cancelled", "图片加载已取消。")
   return URL.createObjectURL(blob)
 }
+
+export async function favoriteAsset(id: string, favorite: boolean): Promise<ImageAsset> {
+  const resource = await request<AssetResource>(`/assets/${encodeURIComponent(id)}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_favorite: favorite }),
+  })
+  return mapAsset(resource, "")
+}
+
+export async function deleteAsset(id: string): Promise<void> {
+  await request<{ deleted: true }>(`/assets/${encodeURIComponent(id)}`, { method: "DELETE" })
+}

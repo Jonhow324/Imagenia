@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from .private_storage import private_directory, private_file
+
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS generation_jobs (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL,
@@ -32,7 +34,8 @@ MIGRATION_V2 = (
 
 
 def open_database(data_dir: Path) -> sqlite3.Connection:
-    data_dir.mkdir(parents=True, exist_ok=True)
+    private_directory(data_dir)
+    private_file(data_dir / "imagenia.sqlite3")
     connection = sqlite3.connect(data_dir / "imagenia.sqlite3", timeout=30)
     connection.row_factory = sqlite3.Row
     try:

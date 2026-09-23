@@ -19,7 +19,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { getSettings, type SettingsStatus } from "@/services/settings"
-import { enqueueGeneration, getAsset, getJob, listAssetPage, listJobs } from "@/services/generation"
+import { deleteAsset as removeAsset, enqueueGeneration, favoriteAsset, getAsset, getJob, listAssetPage, listJobs } from "@/services/generation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Toaster } from "@/components/ui/sonner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -43,6 +43,7 @@ export function ImageniaWorkbench() {
   const editingUrl = React.useRef<string | null>(null)
   const editController = React.useRef<AbortController | null>(null)
   const [favoriteOnly, setFavoriteOnly] = React.useState(false)
+  const mutations = React.useRef(new Set<string>())
   const [kindFilter, setKindFilter] = React.useState<KindFilter>("all")
   const [settingsStatus, setSettingsStatus] = React.useState<SettingsStatus | null>(null)
   const [settingsError, setSettingsError] = React.useState("")
@@ -98,12 +99,41 @@ export function ImageniaWorkbench() {
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url) }
   }, [selectedAsset?.sourceAssetId])
 
-  function toggleFavorite(_asset: ImageAsset) {
-    toast.info("收藏功能尚未开放，请等待后续工单。")
+  async function toggleFavorite(asset: ImageAsset) {
+    if (mutations.current.has(asset.id)) return
+    mutations.current.add(asset.id)
+    try {
+      const updated = await favoriteAsset(asset.id, !asset.isFavorite)
+      setAssets((current) => current.map((item) => item.id === asset.id
+        ? { ...item, isFavorite: updated.isFavorite } : item))
+      setExtraDetail((current) => current?.id === asset.id
+        ? { ...current, isFavorite: updated.isFavorite } : current)
+      toast.success(updated.isFavorite ? "已收藏图片" : "已取消收藏")
+      // In filtered view the removed item and its pagination cursor must be
+      // reconciled with the server; refresh also revokes old object URLs.
+      if (favoriteOnly && !updated.isFavorite) refreshAssets()
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "收藏操作失败，请重试。")
+    } finally {
+      mutations.current.delete(asset.id)
+    }
   }
 
-  function deleteAsset(_asset: ImageAsset) {
-    toast.info("删除功能尚未开放，图片和资产记录未被更改。")
+  async function deleteAsset(asset: ImageAsset) {
+    if (mutations.current.has(asset.id)) return
+    mutations.current.add(asset.id)
+    try {
+      await removeAsset(asset.id)
+      if (editingAsset?.id === asset.id) cancelEdit()
+      closeDetail()
+      refreshAssets()
+      listJobs().then(setJobs).catch(() => {})
+      toast.success("图片已永久删除")
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "删除失败，请重试。")
+    } finally {
+      mutations.current.delete(asset.id)
+    }
   }
 
   function replaceAssets(fresh: ImageAsset[]) {

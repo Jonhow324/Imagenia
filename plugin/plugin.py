@@ -43,6 +43,7 @@ class ImageniaPlugin:
     def unregister(self) -> None:
         if self.app is not None:
             self.app.worker.stop()
+            self.app._trace_thread("unregister")
             self.app.database.close()
             self.app = None
 
