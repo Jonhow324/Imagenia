@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 import struct
+import time
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -15,6 +16,9 @@ from .provider import ImageProvider, ProviderError
 from .private_storage import private_directory
 from .settings import DEFAULT_MODEL
 from .storage import open_database
+
+
+JOB_TIMEOUT_SECONDS = 600
 
 
 def source_image(db: sqlite3.Connection, data_dir: Path, asset_id: str) -> bytes:
@@ -77,6 +81,22 @@ class GenerationWorker:
                 # Keep the worker alive after a transient SQLite or filesystem failure.
                 self._stop.wait(1)
 
+    def _expire(self, job_id: str) -> None:
+        """Persist a deadline without interrupting a potentially billable provider call."""
+        try:
+            db = open_database(self.data_dir)
+            try:
+                with db:
+                    db.execute("""UPDATE generation_jobs SET status='failed', error_code='timeout',
+                        error_message='图像服务超时，请重新提交。', finished_at=?, request_json=NULL
+                        WHERE id=? AND status='running'""", (now(), job_id))
+            finally:
+                db.close()
+        except Exception:
+            # Timer thread must never print an exception containing paths or secrets.
+            # The worker checks its deadline again before publishing a result.
+            pass
+
     def process_next(self) -> bool:
         """Claim at most one pending job; also usable deterministically in HTTP tests."""
         db = open_database(self.data_dir)
@@ -88,6 +108,10 @@ class GenerationWorker:
                 if job is None:
                     return False
                 db.execute("UPDATE generation_jobs SET status='running', started_at=? WHERE id=?", (now(), job["id"]))
+            deadline = time.monotonic() + JOB_TIMEOUT_SECONDS
+            timer = threading.Timer(JOB_TIMEOUT_SECONDS, self._expire, args=(job["id"],))
+            timer.daemon = True
+            timer.start()
             try:
                 options = json.loads(job["request_json"])
                 active_model = getattr(self.provider, "model", DEFAULT_MODEL)
@@ -97,6 +121,8 @@ class GenerationWorker:
                     content = self.provider.edit(job["prompt"], source, size=options["size"], quality=options["quality"])
                 else:
                     content = self.provider.generate(job["prompt"], size=options["size"], quality=options["quality"])
+                if time.monotonic() >= deadline:
+                    raise ProviderError("timeout")
                 if not isinstance(content, bytes) or len(content) > 25 * 1024 * 1024 or len(content) < 24 or content[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR":
                     raise ProviderError("invalid_image")
                 width, height = struct.unpack(">II", content[16:24])
@@ -111,10 +137,14 @@ class GenerationWorker:
                 target = directory / f"{asset_id}.png"
                 relative = target.relative_to(self.data_dir).as_posix()
                 try:
+                    if time.monotonic() >= deadline:
+                        raise ProviderError("timeout")
                     descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                     with os.fdopen(descriptor, "wb") as image:
                         image.write(content)
                     with db:
+                        if time.monotonic() >= deadline:
+                            raise ProviderError("timeout")
                         current = db.execute("SELECT status FROM generation_jobs WHERE id=?", (job["id"],)).fetchone()
                         if current is None or current["status"] != "running" or (job["kind"] == "edit" and
                             db.execute("SELECT 1 FROM image_assets WHERE id=?", (job["source_asset_id"],)).fetchone() is None):
@@ -126,19 +156,27 @@ class GenerationWorker:
                             (asset_id, "edited" if job["kind"] == "edit" else "generated", job["source_asset_id"],
                              job["prompt"], active_model, options["size"], options["quality"], width, height,
                              relative, len(content), timestamp, timestamp))
+                        if time.monotonic() >= deadline:
+                            raise ProviderError("timeout")
                         db.execute("""UPDATE generation_jobs SET status='succeeded', result_asset_id=?,
                             finished_at=?, request_json=NULL WHERE id=?""", (asset_id, timestamp, job["id"]))
                 except Exception:
                     target.unlink(missing_ok=True)
                     raise
             except Exception as exc:
-                code = exc.code if isinstance(exc, ProviderError) and exc.code in {
-                    "not_configured", "invalid_api_key", "invalid_image", "source_unavailable"} else "service_unavailable"
+                code = "timeout" if isinstance(exc, TimeoutError) else (exc.code if isinstance(exc, ProviderError) and exc.code in {
+                    "not_configured", "invalid_api_key", "invalid_image", "source_unavailable",
+                    "timeout", "rate_limited", "invalid_response"} else "service_unavailable")
                 messages = {"not_configured": "请先配置 API Key。", "invalid_api_key": "API Key 无效，请检查配置。",
-                            "invalid_image": "服务返回的图片无效，请重新提交。", "source_unavailable": "来源图片已不可用，请重新选择。", "service_unavailable": "图像服务暂时不可用，请稍后重新提交。"}
+                            "invalid_image": "服务返回的图片无效，请重新提交。", "source_unavailable": "来源图片已不可用，请重新选择。",
+                            "timeout": "图像服务超时，请重新提交。", "rate_limited": "图像服务请求过于频繁，请稍后重试。",
+                            "invalid_response": "图像服务响应无效，请稍后重试。",
+                            "service_unavailable": "图像服务暂时不可用，请稍后重新提交。"}
                 with db:
                     db.execute("""UPDATE generation_jobs SET status='failed', error_code=?, error_message=?,
-                        finished_at=?, request_json=NULL WHERE id=?""", (code, messages[code], now(), job["id"]))
+                        finished_at=?, request_json=NULL WHERE id=? AND status='running'""", (code, messages[code], now(), job["id"]))
+            finally:
+                timer.cancel()
             return True
         finally:
             db.close()

@@ -55,3 +55,25 @@ def test_configured_endpoint_and_model_are_sent_without_network(monkeypatch):
         base_url=lambda: "https://gateway.example/v1/", model=lambda: "custom-image-v2")
     assert provider.generate("test", size="square", quality="standard") == b"png"
     assert captured == [("https://gateway.example/v1/images/generations", "custom-image-v2")]
+
+@pytest.mark.parametrize("method", ["generate", "edit"])
+@pytest.mark.parametrize("failure, expected", [
+    (429, "rate_limited"), (503, "service_unavailable"),
+    ("timeout", "timeout"), ("bad_json", "invalid_response"),
+    ("bad_payload", "invalid_response"),
+])
+def test_upstream_failures_have_stable_safe_codes(monkeypatch, method, failure, expected):
+    def fake_open(request, timeout):
+        if isinstance(failure, int):
+            raise urllib.error.HTTPError(request.full_url, failure, "sk-private /tmp/secret", {}, None)
+        if failure == "timeout":
+            raise urllib.error.URLError(TimeoutError("sk-private /tmp/secret"))
+        return io.BytesIO(b"not json" if failure == "bad_json" else b'{"data":[]}')
+    monkeypatch.setattr(urllib.request, "urlopen", fake_open)
+    provider = OpenAIImageProvider(lambda: "sk-private")
+    args = ("secret prompt", b"source") if method == "edit" else ("secret prompt",)
+    with pytest.raises(ProviderError) as raised:
+        getattr(provider, method)(*args, size="square", quality="standard")
+    assert raised.value.code == expected
+    assert "sk-private" not in str(raised.value)
+    assert "/tmp/secret" not in str(raised.value)

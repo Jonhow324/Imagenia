@@ -57,9 +57,15 @@ class OpenAIImageProvider:
             encoded = payload["data"][0]["b64_json"]
             return base64.b64decode(encoded, validate=True)
         except urllib.error.HTTPError as exc:
-            raise ProviderError("invalid_api_key" if exc.code in (401, 403) else "service_unavailable") from None
-        except (urllib.error.URLError, TimeoutError, OSError, KeyError, IndexError,
-                ValueError, TypeError, binascii.Error):
+            code = "invalid_api_key" if exc.code in (401, 403) else "rate_limited" if exc.code == 429 else "service_unavailable"
+            raise ProviderError(code) from None
+        except urllib.error.URLError as exc:
+            raise ProviderError("timeout" if isinstance(exc.reason, TimeoutError) else "service_unavailable") from None
+        except TimeoutError:
+            raise ProviderError("timeout") from None
+        except (KeyError, IndexError, ValueError, TypeError, binascii.Error):
+            raise ProviderError("invalid_response") from None
+        except OSError:
             raise ProviderError("service_unavailable") from None
 
     def edit(self, prompt: str, source: bytes, *, size: str, quality: str) -> bytes:
@@ -89,9 +95,15 @@ class OpenAIImageProvider:
                 payload = json.load(response)
             return base64.b64decode(payload["data"][0]["b64_json"], validate=True)
         except urllib.error.HTTPError as exc:
-            raise ProviderError("invalid_api_key" if exc.code in (401, 403) else "service_unavailable") from None
-        except (urllib.error.URLError, TimeoutError, OSError, KeyError, IndexError,
-                ValueError, TypeError, binascii.Error):
+            code = "invalid_api_key" if exc.code in (401, 403) else "rate_limited" if exc.code == 429 else "service_unavailable"
+            raise ProviderError(code) from None
+        except urllib.error.URLError as exc:
+            raise ProviderError("timeout" if isinstance(exc.reason, TimeoutError) else "service_unavailable") from None
+        except TimeoutError:
+            raise ProviderError("timeout") from None
+        except (KeyError, IndexError, ValueError, TypeError, binascii.Error):
+            raise ProviderError("invalid_response") from None
+        except OSError:
             raise ProviderError("service_unavailable") from None
 
 
