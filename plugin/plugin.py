@@ -20,25 +20,29 @@ class ImageniaPlugin:
 
     def register(self, api: Any) -> None:
         if self.app is not None:
-            self.app.worker.stop()
-        data_dir = Path(os.environ.get("IMAGENIA_DATA_DIR", Path.home() / ".qwenpaw" / "plugins" / "imagenia"))
-        self.app = create_app(data_dir)
-        self.app.provider = OpenAIImageProvider(lambda: self.app.settings.effective()[0],
-            base_url=lambda: self.app.settings.effective()[2],
-            model=lambda: self.app.settings.effective()[3])
-        self.app.worker.provider = self.app.provider
-        # QwenPaw mounts APIRouter under /api + prefix. Import FastAPI lazily so
-        # the dependency-free HTTP seam remains runnable outside the host.
-        from src.imagenia_plugin.qwenpaw_router import build_router
-
+            self.unregister()
         if not hasattr(api, "register_http_router"):
             raise RuntimeError("QwenPaw PluginApi.register_http_router is required")
-        api.register_http_router(
-            build_router(self.app),
-            prefix="/imagenia",
-            tags=["imagenia"],
-        )
-        self.app.worker.start()
+        data_dir = Path(os.environ.get("IMAGENIA_DATA_DIR", Path.home() / ".qwenpaw" / "plugins" / "imagenia"))
+        app = create_app(data_dir)  # A failed migration cannot register a backend.
+        try:
+            app.provider = OpenAIImageProvider(lambda: app.settings.effective()[0],
+                base_url=lambda: app.settings.effective()[2],
+                model=lambda: app.settings.effective()[3])
+            app.worker.provider = app.provider
+            # Import FastAPI only inside QwenPaw; the local HTTP seam needs none.
+            from src.imagenia_plugin.qwenpaw_router import build_router
+
+            app.worker.recover()
+            api.register_http_router(
+                build_router(app), prefix="/imagenia", tags=["imagenia"],
+            )
+            app.worker.start()
+        except BaseException:
+            app.worker.stop()
+            app.database.close()
+            raise
+        self.app = app
 
     def unregister(self) -> None:
         if self.app is not None:

@@ -71,6 +71,9 @@ class GenerationWorker:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=1)
+        # A provider call cannot be killed safely. Mark any in-flight job as
+        # interrupted now; its eventual result must never be published.
+        self.recover()
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -99,6 +102,8 @@ class GenerationWorker:
 
     def process_next(self) -> bool:
         """Claim at most one pending job; also usable deterministically in HTTP tests."""
+        if self._stop.is_set():
+            return False
         db = open_database(self.data_dir)
         try:
             with db:
@@ -121,6 +126,8 @@ class GenerationWorker:
                     content = self.provider.edit(job["prompt"], source, size=options["size"], quality=options["quality"])
                 else:
                     content = self.provider.generate(job["prompt"], size=options["size"], quality=options["quality"])
+                if self._stop.is_set():
+                    raise ProviderError("interrupted")
                 if time.monotonic() >= deadline:
                     raise ProviderError("timeout")
                 if not isinstance(content, bytes) or len(content) > 25 * 1024 * 1024 or len(content) < 24 or content[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR":
@@ -137,12 +144,16 @@ class GenerationWorker:
                 target = directory / f"{asset_id}.png"
                 relative = target.relative_to(self.data_dir).as_posix()
                 try:
+                    if self._stop.is_set():
+                        raise ProviderError("interrupted")
                     if time.monotonic() >= deadline:
                         raise ProviderError("timeout")
                     descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                     with os.fdopen(descriptor, "wb") as image:
                         image.write(content)
                     with db:
+                        if self._stop.is_set():
+                            raise ProviderError("interrupted")
                         if time.monotonic() >= deadline:
                             raise ProviderError("timeout")
                         current = db.execute("SELECT status FROM generation_jobs WHERE id=?", (job["id"],)).fetchone()
@@ -156,6 +167,8 @@ class GenerationWorker:
                             (asset_id, "edited" if job["kind"] == "edit" else "generated", job["source_asset_id"],
                              job["prompt"], active_model, options["size"], options["quality"], width, height,
                              relative, len(content), timestamp, timestamp))
+                        if self._stop.is_set():
+                            raise ProviderError("interrupted")
                         if time.monotonic() >= deadline:
                             raise ProviderError("timeout")
                         db.execute("""UPDATE generation_jobs SET status='succeeded', result_asset_id=?,
@@ -166,10 +179,10 @@ class GenerationWorker:
             except Exception as exc:
                 code = "timeout" if isinstance(exc, TimeoutError) else (exc.code if isinstance(exc, ProviderError) and exc.code in {
                     "not_configured", "invalid_api_key", "invalid_image", "source_unavailable",
-                    "timeout", "rate_limited", "invalid_response"} else "service_unavailable")
+                    "timeout", "rate_limited", "invalid_response", "interrupted"} else "service_unavailable")
                 messages = {"not_configured": "请先配置 API Key。", "invalid_api_key": "API Key 无效，请检查配置。",
                             "invalid_image": "服务返回的图片无效，请重新提交。", "source_unavailable": "来源图片已不可用，请重新选择。",
-                            "timeout": "图像服务超时，请重新提交。", "rate_limited": "图像服务请求过于频繁，请稍后重试。",
+                            "timeout": "图像服务超时，请重新提交。", "interrupted": "任务已中断，请重新提交。", "rate_limited": "图像服务请求过于频繁，请稍后重试。",
                             "invalid_response": "图像服务响应无效，请稍后重试。",
                             "service_unavailable": "图像服务暂时不可用，请稍后重新提交。"}
                 with db:

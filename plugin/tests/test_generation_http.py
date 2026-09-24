@@ -143,7 +143,7 @@ async def test_upgrade_preserves_version_one_jobs(tmp_path, monkeypatch):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
         result = await http.get("/api/imagenia/jobs/old")
     assert result.json()["status"] == "failed"
-    assert app.database.execute("SELECT version FROM schema_version").fetchone()[0] == 2
+    assert app.database.execute("SELECT version FROM schema_version").fetchone()[0] == 3
 
 @pytest.mark.anyio
 async def test_started_worker_completes_queued_job_without_manual_process(generation):
