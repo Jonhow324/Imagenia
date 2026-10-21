@@ -6,12 +6,38 @@ The application itself is dependency-free and can be tested with an ASGI client.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
 from src.imagenia_plugin import create_app
 from src.imagenia_plugin.provider import OpenAIImageProvider
+
+
+def data_directory() -> Path:
+    """Keep new data with the installed plugin, without hiding legacy data."""
+    configured = os.environ.get("IMAGENIA_DATA_DIR")
+    if configured is not None:
+        if not configured.strip():
+            raise RuntimeError("IMAGENIA_DATA_DIR must not be empty")
+        return Path(configured)
+
+    directory = Path(__file__).resolve().parent / "data"
+    legacy = Path.home() / ".qwenpaw" / "plugins" / "imagenia"
+
+    def has_data(candidate: Path) -> bool:
+        return any((candidate / name).exists() or (candidate / name).is_symlink()
+                   for name in ("imagenia.sqlite3", "config", "images"))
+
+    if not has_data(directory) and has_data(legacy):
+        logging.getLogger(__name__).warning(
+            "Imagenia is using its legacy home data directory. For Docker persistence, "
+            "stop the plugin, back up and copy the complete data directory to a persistent "
+            "mount, then set IMAGENIA_DATA_DIR to that location. See plugin/README.md."
+        )
+        return legacy
+    return directory
 
 
 class ImageniaPlugin:
@@ -23,7 +49,7 @@ class ImageniaPlugin:
             self.unregister()
         if not hasattr(api, "register_http_router"):
             raise RuntimeError("QwenPaw PluginApi.register_http_router is required")
-        data_dir = Path(os.environ.get("IMAGENIA_DATA_DIR", Path.home() / ".qwenpaw" / "plugins" / "imagenia"))
+        data_dir = data_directory()
         app = create_app(data_dir)  # A failed migration cannot register a backend.
         try:
             app.provider = OpenAIImageProvider(lambda: app.settings.effective()[0],
