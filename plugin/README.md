@@ -20,13 +20,51 @@ Imagenia 是面向 QwenPaw 2.2.1 的本地 AI 图像工作台。当前仓库包�
 - 详情 Sheet；从详情进入图片编辑、追溯直接来源；收藏和删除已可使用（删除需确认）；
 - 成功后刷新并高亮新资产，不自动打开详情。
 
-本地预览：
+## 本地开发与验证
+
+日常界面和业务流程修改可以直接在本机验证，无需拉取到 QwenPaw 或重启宿主。使用两个终端分别运行本地后端和 Vite。以下命令从仓库根目录开始执行。
+
+首次安装开发依赖（Python 3.11+）：
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -r plugin/requirements-dev.txt
+cd plugin/frontend
+npm install
+```
+
+终端一，在仓库根目录启动后端：
+
+```bash
+.venv/bin/python plugin/dev.py --reload
+```
+
+终端二启动前端：
 
 ```bash
 cd plugin/frontend
-npm install
 npm run dev
 ```
+
+浏览器打开 `http://127.0.0.1:5173`。Vite 将 `/api/imagenia` 代理到 `127.0.0.1:8765`；前端改动热更新，Python 改动由 `--reload` 自动重启后端。后端复用正式插件的 FastAPI 路由、SQLite、后台 worker 和文件存储。
+
+默认是 **fake 离线模式**：
+
+- 无需 QwenPaw 登录或真实 API Key；自动配置一个本地演示占位值。
+- 首次启动创建 36 张不同颜色和画幅的 PNG，包含收藏和直接编辑来源，便于测试第二页加载。
+- 可测试生成、编辑、任务轮询、收藏、筛选、详情、分页、删除及刷新后的数据保留。生成和编辑返回彩色占位图，不模拟图像模型的创作效果；连接测试也不访问外部服务。
+- 数据保存到 Git 忽略的 `plugin/.local-data/fake/`，重启保留数据，已有任务时不会重新填充。此入口不读取宿主的 `IMAGENIA_DATA_DIR`。
+- `--seed 0` 可在一个新的数据目录中测试空库；例如 `plugin/dev.py --reload --seed 0 --data-dir /tmp/imagenia-empty`。`--seed` 仅影响首次空库初始化，范围为 0～100。
+
+需要真实生图时，先停止 fake 后端，再显式启动：
+
+```bash
+.venv/bin/python plugin/dev.py --provider openai --reload
+```
+
+此模式默认使用独立的 `plugin/.local-data/openai/`，不会自动创建样本。可在页面配置 API Key、base URL 和模型，或使用 `IMAGENIA_OPENAI_*` 环境变量。生成和编辑将调用配置的服务，可能产生费用。
+
+本地后端只监听 `127.0.0.1`，不模拟 QwenPaw 的登录鉴权。菜单/路由注册、宿主内 iframe 行为、登录失效及宿主安装/卸载仍需在 QwenPaw 中验收。常规样式、文案、表单、图库和业务逻辑改动可先完成本地验证，再集中到宿主做一次集成回归。
 
 类型检查和生产构建：
 

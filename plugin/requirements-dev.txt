@@ -1,3 +1,5 @@
+-r requirements.txt
 httpx>=0.28,<1
 pytest>=8,<10
 anyio>=4,<5
+uvicorn>=0.30,<1

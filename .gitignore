@@ -5,6 +5,7 @@
 settings.json
 
 # Imagenia runtime data
+plugin/.local-data/
 data/
 storage/
 *.sqlite

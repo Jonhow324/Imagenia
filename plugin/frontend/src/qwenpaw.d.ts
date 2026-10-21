@@ -12,7 +12,7 @@ declare global {
         add: (pluginId: string, route: { id: string; path: string; component: ReactNamespace.ComponentType }) => unknown
       }
       menu: {
-        add: (pluginId: string, item: { id: string; label: string; icon?: string; route: string; location: string }) => unknown
+        add: (pluginId: string, item: { id: string; label: string; icon?: ReactNamespace.ComponentType | ReactNamespace.ReactNode; route: string; location: string }) => unknown
       }
     }
   }

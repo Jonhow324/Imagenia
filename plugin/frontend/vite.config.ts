@@ -11,6 +11,14 @@ export default defineConfig({
       "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
+  server: {
+    host: "127.0.0.1",
+    port: 5173,
+    strictPort: true,
+    proxy: {
+      "/api/imagenia": "http://127.0.0.1:8765",
+    },
+  },
   build: {
     outDir: "dist/app",
     emptyOutDir: true,

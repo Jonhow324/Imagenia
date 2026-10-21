@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%" fill="none">
+  <!-- Monochrome Flat Badge using evenodd compound path for true transparent negative space -->
+  <path fill="#1E1B4B" fill-rule="evenodd" d="
+    M 256 40
+    C 375.3 40 472 136.7 472 256
+    C 472 375.3 375.3 472 256 472
+    C 136.7 472 40 375.3 40 256
+    C 40 136.7 136.7 40 256 40 Z
+
+    M 256 104
+    L 384 232
+    C 397.3 245.3 397.3 266.7 384 280
+    L 280 384
+    C 266.7 397.3 245.3 397.3 232 384
+    L 128 280
+    C 114.7 266.7 114.7 245.3 128 232
+    L 232 128
+    C 245.3 114.7 266.7 114.7 280 128 Z
+  " />
+
+  <!-- 4-Point Imagination Star (Dot of 'i') -->
+  <path fill="#1E1B4B" d="
+    M 256 140
+    Q 256 184 300 184
+    Q 256 184 256 228
+    Q 256 184 212 184
+    Q 256 184 256 140 Z
+  " />
+
+  <!-- Geometric Pillar (Stem of 'i') -->
+  <rect x="234" y="242" width="44" height="116" rx="22" fill="#1E1B4B" />
+</svg>
