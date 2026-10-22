@@ -68,7 +68,7 @@ jobs:
       - name: Stage plugin package
         run: |
           mkdir -p staging/imagenia/frontend
-          cp plugin/plugin.json plugin/plugin.py plugin/requirements.txt plugin/README.md staging/imagenia/
+          cp plugin/plugin.json plugin/plugin.py plugin/requirements.txt plugin/README.md plugin/icon.svg staging/imagenia/
           cp -r plugin/frontend/dist staging/imagenia/frontend/dist
           rsync -a --exclude '__pycache__/' plugin/src/ staging/imagenia/src/
 

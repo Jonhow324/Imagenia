@@ -218,7 +218,7 @@ npm run build
 
 `npm run build` 依次类型检查、构建 `dist/app/`、构建 `dist/index.js` 并运行产物与配置请求测试。`npm run test:build` 可以在已有产物上单独运行。将整个 `plugin/`（包括两个前端产物）同步到宿主后重启插件，在 QwenPaw 2.2.1 验证侧边栏、iframe 加载、交互与浏览器控制台。
 
-**构建产物不入库**：`plugin/frontend/dist/` 已被 Git 忽略，克隆仓库后本地没有该目录，必须先执行 `npm install && npm run build` 生成产物，再同步到宿主。正式发布产物由 GitHub Actions 在推送 `v*` 标签时构建（见 `.github/workflows/build.yml`），组装完整插件包 `imagenia-<tag>.zip`（清单、后端入口、依赖声明、README 与两个前端产物）附在对应的 GitHub Release 上，tag 必须与 `plugin.json` 的 `version` 一致；普通 push 到 `main` 和 PR 只构建并上传 artifact，不创建 Release。发布包内容、平台限制与操作步骤见 [docs/plugin-release.md](../docs/plugin-release.md)。
+**构建产物不入库**：`plugin/frontend/dist/` 已被 Git 忽略，克隆仓库后本地没有该目录，必须先执行 `npm install && npm run build` 生成产物，再同步到宿主。正式发布产物由 GitHub Actions 在推送 `v*` 标签时构建（见 `.github/workflows/build.yml`），组装完整插件包 `imagenia-<tag>.zip`（清单、后端入口、依赖声明、README、侧边栏图标与两个前端产物）附在对应的 GitHub Release 上，tag 必须与 `plugin.json` 的 `version` 一致；普通 push 到 `main` 和 PR 只构建并上传 artifact，不创建 Release。发布包内容、平台限制与操作步骤见 [docs/plugin-release.md](../docs/plugin-release.md)。
 
 Tailwind preflight 已关闭，选择器限制在 `.imagenia-root` 下；Select、Tooltip、Sheet 和 AlertDialog 使用工作台自己的 portal 容器。iframe 进一步隔离了工作台样式和宿主页面。
 

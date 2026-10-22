@@ -29,11 +29,14 @@ imagenia/
 ├── plugin.py
 ├── requirements.txt
 ├── README.md
+├── icon.svg
 ├── src/imagenia_plugin/
 └── frontend/dist/
     ├── index.js
     └── app/
 ```
+
+`icon.svg` 必须保留在插件根目录：`frontend/dist/index.js` 在运行时通过 `/api/frontend_plugin/imagenia/files/icon.svg` 加载侧边栏图标，缺失时会显示为破图。
 
 不要只打包 `frontend/dist/index.js`：`plugin.json` 声明的前端入口是它，但工作台页面资源在 `frontend/dist/app/`，两部分都来自 `npm run build`。打包排除 `node_modules/`、虚拟环境、`__pycache__/`、`data/`、`.env`、API Key 与本机配置。`plugin.py` 以 `src.imagenia_plugin` 导入后端包，暂存目录结构不能改动。
 
