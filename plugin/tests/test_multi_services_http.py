@@ -390,3 +390,97 @@ async def test_explicit_invalid_selection_never_uses_the_default(app, partial):
         response = await http.post("/api/imagenia/jobs/generate", json={"prompt": "do not silently redirect", **partial})
         assert response.status_code == 422 and response.json()["error"]["code"] == "invalid_selection"
         assert (await http.get("/api/imagenia/jobs")).json()["items"] == []
+
+
+def minimax_service():
+    return {"provider": "minimax", "name": "MiniMax", "base_url": "https://api.minimax.test/v1",
+            "api_key": "mm-service-key",
+            "models": [{"name": "image-01", "sizes": ["square", "landscape", "portrait"],
+                        "qualities": ["standard"], "supports_edit": False}]}
+
+
+@pytest.mark.anyio
+async def test_catalog_offers_builtin_presets_and_keeps_custom_backward_compatible(app):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+        catalog = (await http.get("/api/imagenia/services")).json()
+        assert {item["id"] for item in catalog["providers"]} == {"openai", "minimax", "custom"}
+        openai = next(item for item in catalog["providers"] if item["id"] == "openai")
+        minimax = next(item for item in catalog["providers"] if item["id"] == "minimax")
+        assert openai["base_url"] == "https://api.openai.com/v1"
+        assert openai["models"][0]["name"] == "gpt-image-1" and openai["models"][0]["supports_edit"]
+        assert minimax["base_url"] == "https://api.minimax.cn/v1"
+        assert minimax["models"][0] == {"name": "image-01", "sizes": ["square", "landscape", "portrait"],
+                                        "qualities": ["standard"], "supports_edit": False}
+
+        custom = await add(http)
+        assert custom["provider"] == "custom"
+        created = await http.post("/api/imagenia/services", json=minimax_service())
+        assert created.status_code == 201
+        assert created.json()["services"][-1]["provider"] == "minimax"
+        invalid = await http.post("/api/imagenia/services", json={**minimax_service(), "provider": "other"})
+        assert invalid.status_code == 422 and invalid.json()["error"]["code"] == "invalid_service"
+
+
+@pytest.mark.anyio
+async def test_v1_catalog_is_read_as_custom_without_changing_behavior(app):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+        item = await add(http, editing=False)
+        document = json.loads(app.services.file.read_text())
+        document["version"] = 1
+        for service in document["services"]:
+            service.pop("provider")
+        app.services.file.write_text(json.dumps(document))
+
+        migrated = (await http.get("/api/imagenia/services")).json()
+        assert migrated["services"][0]["provider"] == "custom"
+        queued = await http.post("/api/imagenia/jobs/generate", json=selection(item))
+        assert queued.status_code == 202
+        assert app.worker.process_next()
+        assert (await http.get(f"/api/imagenia/jobs/{queued.json()['job_id']}")).json()["status"] == "succeeded"
+
+
+@pytest.mark.anyio
+async def test_provider_change_is_locked_while_a_job_is_active(app):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+        item = await add(http)
+        assert (await http.post("/api/imagenia/jobs/generate", json=selection(item))).status_code == 202
+        locked = await http.put(f"/api/imagenia/services/{item['id']}", json={"provider": "minimax"})
+        assert locked.status_code == 409 and locked.json()["error"]["code"] == "service_in_use"
+        assert app.worker.process_next()
+        assert (await http.put(f"/api/imagenia/services/{item['id']}", json={"provider": "minimax"})).status_code == 200
+
+
+@pytest.mark.anyio
+async def test_bound_minimax_service_uses_native_adapter_and_stores_jpeg(app, monkeypatch):
+    import base64
+    import io
+    import urllib.request
+    from src.imagenia_plugin.provider import provider_for
+
+    app.provider_factory = provider_for
+    jpeg = (b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+            b"\xff\xc0\x00\x11\x08\x00\x10\x00\x10\x03\x01\x11\x00\x02\x11\x00\x03\x11\x00\xff\xd9")
+    requests = []
+
+    def fake_open(request, timeout):
+        requests.append((request.full_url, json.loads(request.data)))
+        return io.BytesIO(json.dumps({"data": {"image_base64": [base64.b64encode(jpeg).decode()]},
+                                      "base_resp": {"status_code": 0}}).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_open)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+        created = (await http.post("/api/imagenia/services", json=minimax_service())).json()["services"][-1]
+        queued = await http.post("/api/imagenia/jobs/generate", json=selection(created))
+        assert queued.status_code == 202
+        assert app.worker.process_next()
+        job = (await http.get(f"/api/imagenia/jobs/{queued.json()['job_id']}")).json()
+        assert job["status"] == "succeeded"
+        content = await http.get(f"/api/imagenia/assets/{job['result_asset_id']}/content")
+        assert content.content == jpeg and content.headers["content-type"].startswith("image/jpeg")
+        row = app.database.execute("SELECT file_path, mime_type FROM image_assets WHERE id=?",
+                                   (job["result_asset_id"],)).fetchone()
+        assert row["file_path"].endswith(".jpg") and row["mime_type"] == "image/jpeg"
+
+    assert requests == [("https://api.minimax.test/v1/image_generation",
+                         {"model": "image-01", "prompt": "private prompt", "aspect_ratio": "1:1",
+                          "response_format": "base64", "n": 1})]

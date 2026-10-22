@@ -15,6 +15,11 @@ from urllib.parse import urlsplit
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-image-2.5"
 
+# Mainland China endpoint from platform.minimax.cn. International deployments
+# can use https://api.minimax.io/v1 with the same request contract.
+DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.cn/v1"
+DEFAULT_MINIMAX_MODEL = "image-01"
+
 
 class ConfigurationUnavailable(Exception):
     """The private configuration cannot be read or written safely."""

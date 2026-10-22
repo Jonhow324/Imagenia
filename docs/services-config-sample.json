@@ -1,0 +1,61 @@
+{
+  "version": 2,
+  "signing_key": "0000000000000000000000000000000000000000000000000000000000000000",
+  "services": [
+    {
+      "id": "openai-default",
+      "provider": "openai",
+      "name": "OpenAI 图像",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "YOUR_OPENAI_API_KEY",
+      "enabled": true,
+      "models": [
+        {
+          "id": "openai-gpt-image-1",
+          "name": "gpt-image-1",
+          "sizes": ["square", "landscape", "portrait"],
+          "qualities": ["standard", "high"],
+          "supports_edit": true
+        }
+      ]
+    },
+    {
+      "id": "minimax-default",
+      "provider": "minimax",
+      "name": "MiniMax 图像",
+      "base_url": "https://api.minimax.cn/v1",
+      "api_key": "YOUR_MINIMAX_API_KEY",
+      "enabled": true,
+      "models": [
+        {
+          "id": "minimax-image-01",
+          "name": "image-01",
+          "sizes": ["square", "landscape", "portrait"],
+          "qualities": ["standard"],
+          "supports_edit": false
+        }
+      ]
+    },
+    {
+      "id": "custom-gateway",
+      "provider": "custom",
+      "name": "自定义兼容网关",
+      "base_url": "https://images.example.com/v1",
+      "api_key": "YOUR_GATEWAY_API_KEY",
+      "enabled": true,
+      "models": [
+        {
+          "id": "custom-image-model",
+          "name": "your-image-model",
+          "sizes": ["square", "landscape"],
+          "qualities": ["standard", "high"],
+          "supports_edit": true
+        }
+      ]
+    }
+  ],
+  "default": {
+    "service_id": "openai-default",
+    "model_id": "openai-gpt-image-1"
+  }
+}

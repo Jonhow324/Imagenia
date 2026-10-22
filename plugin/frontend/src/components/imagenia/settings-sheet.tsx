@@ -12,10 +12,11 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { deleteService, getServices, saveService, setDefaultService, testServiceConnection,
-  type CatalogStatus, type ImageService, type ServiceInput, type ServiceModel } from "@/services/settings"
+  type CatalogStatus, type ImageService, type ProviderId, type ServiceInput, type ServiceModel } from "@/services/settings"
 
 const blankModel = (): ServiceModel => ({ name: "", sizes: ["square", "landscape", "portrait"], qualities: ["standard", "high"], supports_edit: false })
-const blankService = (): ServiceInput => ({ name: "", base_url: "https://api.openai.com/v1", enabled: true, models: [blankModel()] })
+const blankService = (): ServiceInput => ({ provider: "custom", name: "", base_url: "https://api.openai.com/v1", enabled: true, models: [blankModel()] })
+const providerLabel = (id: ProviderId) => ({ openai: "OpenAI", minimax: "MiniMax", custom: "自定义" })[id]
 
 interface Props {
   open: boolean
@@ -37,10 +38,19 @@ export function SettingsSheet({ open, onOpenChange, status, onSaved }: Props) {
 
   function choose(service?: ImageService) {
     setSelectedId(service?.id ?? null)
-    setDraft(service ? { name: service.name, base_url: service.base_url, enabled: service.enabled,
+    setDraft(service ? { provider: service.provider ?? "custom", name: service.name, base_url: service.base_url, enabled: service.enabled,
       models: service.models.map(model => ({ ...model, sizes: [...model.sizes], qualities: [...model.qualities] })) } : blankService())
     setKey("")
     setError("")
+  }
+
+  function applyProvider(provider: ProviderId) {
+    const preset = status?.providers?.find(item => item.id === provider)
+    setDraft(value => {
+      if (!preset || provider === "custom") return { ...value, provider }
+      return { ...value, provider, name: preset.name, base_url: preset.base_url,
+        models: preset.models.map(model => ({ ...model, sizes: [...model.sizes], qualities: [...model.qualities] })) }
+    })
   }
 
   React.useEffect(() => {
@@ -93,14 +103,14 @@ export function SettingsSheet({ open, onOpenChange, status, onSaved }: Props) {
       <SheetContent className="overflow-y-auto sm:max-w-xl">
         <SheetHeader>
           <SheetTitle>图像服务配置</SheetTitle>
-          <SheetDescription>管理 OpenAI Images 兼容接口。密钥由后端私有保存，不会回显。</SheetDescription>
+          <SheetDescription>管理 OpenAI、MiniMax 或自定义 OpenAI Images 兼容接口。密钥由后端私有保存，不会回显。</SheetDescription>
         </SheetHeader>
         <div className="flex flex-col gap-4 px-4 pb-6">
           <div className="flex flex-wrap gap-2" aria-label="已配置的服务">
             {status?.services.map(service => (
               <Button key={service.id} type="button" variant={selectedId === service.id ? "default" : "outline"}
                 disabled={busy} onClick={() => choose(service)}>
-                {service.name}{!service.enabled ? " · 已停用" : ""}{service.read_only ? " · 只读" : ""}
+                {service.name} · {providerLabel(service.provider ?? "custom")}{!service.enabled ? " · 已停用" : ""}{service.read_only ? " · 只读" : ""}
               </Button>
             ))}
             <Button type="button" variant="outline" disabled={busy} onClick={() => choose()}>
@@ -113,6 +123,19 @@ export function SettingsSheet({ open, onOpenChange, status, onSaved }: Props) {
           <form onSubmit={save} className="flex flex-col gap-4">
             <FieldGroup>
               <Field>
+                <FieldLabel>服务类型</FieldLabel>
+                <ToggleGroup type="single" value={draft.provider} disabled={busy || readOnly || Boolean(selectedId)}
+                  onValueChange={value => { if (value) applyProvider(value as ProviderId) }}>
+                  <ToggleGroupItem value="openai">OpenAI</ToggleGroupItem>
+                  <ToggleGroupItem value="minimax">MiniMax</ToggleGroupItem>
+                  <ToggleGroupItem value="custom">自定义</ToggleGroupItem>
+                </ToggleGroup>
+                <FieldDescription>
+                  {selectedId ? "服务类型在创建时确定；需要更换协议时请新增服务。"
+                    : "选择 OpenAI 或 MiniMax 会填入默认地址和模型，仍可修改；自定义保持 OpenAI Images 兼容行为。"}
+                </FieldDescription>
+              </Field>
+              <Field>
                 <FieldLabel htmlFor="service-name">服务名称</FieldLabel>
                 <Input id="service-name" value={draft.name} disabled={busy || readOnly} maxLength={100}
                   onChange={event => setDraft({ ...draft, name: event.target.value })} placeholder="例如：我的图像服务" required />
@@ -121,7 +144,11 @@ export function SettingsSheet({ open, onOpenChange, status, onSaved }: Props) {
                 <FieldLabel htmlFor="service-url">API 根地址</FieldLabel>
                 <Input id="service-url" type="url" value={draft.base_url} disabled={busy || locked}
                   onChange={event => setDraft({ ...draft, base_url: event.target.value })} required />
-                <FieldDescription>不含 /images/generations；接口需支持当前使用的生成与编辑协议。</FieldDescription>
+                <FieldDescription>
+                  {draft.provider === "minimax"
+                    ? "MiniMax 根地址，例如 https://api.minimax.cn/v1（国际版 https://api.minimax.io/v1）；不要填写 /image_generation。"
+                    : "不含 /images/generations；自定义服务需支持 OpenAI Images 生成与 multipart 编辑协议。"}
+                </FieldDescription>
               </Field>
               <Field>
                 <FieldLabel htmlFor="service-key">API Key</FieldLabel>

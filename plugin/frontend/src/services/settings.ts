@@ -47,7 +47,7 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
       service_disabled: "所选服务已停用，请重新选择。",
       edit_not_supported: "此模型未启用图片编辑，请选择其他模型。",
       unsupported_options: "此模型不支持所选画幅或质量。",
-      invalid_service: "请检查服务名称、地址、密钥和模型列表。",
+      invalid_service: "请检查服务类型、名称、地址、密钥和模型列表。",
       invalid_model: "请检查模型名称是否重复，并至少选择一种画幅和质量。",
       invalid_selection: "请选择有效的服务和模型。",
       configuration_changed: "服务配置已变化，请确认后重新提交。",
@@ -102,6 +102,8 @@ export function testConnection(): Promise<{ status: "ok" }> {
   return request<{ status: "ok" }>("/settings/openai/test", { method: "POST" })
 }
 
+export type ProviderId = "openai" | "minimax" | "custom"
+
 export interface ServiceModel {
   id?: string
   name: string
@@ -110,8 +112,16 @@ export interface ServiceModel {
   supports_edit: boolean
 }
 
+export interface ProviderPreset {
+  id: ProviderId
+  name: string
+  base_url: string
+  models: ServiceModel[]
+}
+
 export interface ImageService {
   id: string
+  provider: ProviderId
   name: string
   base_url: string
   enabled: boolean
@@ -129,9 +139,11 @@ export interface ServiceSelection {
 export interface CatalogStatus {
   services: ImageService[]
   default: ServiceSelection | null
+  providers: ProviderPreset[]
 }
 
 export interface ServiceInput {
+  provider: ProviderId
   name: string
   base_url: string
   api_key?: string

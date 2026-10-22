@@ -13,10 +13,26 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .settings import ConfigurationUnavailable, DEFAULT_BASE_URL, DEFAULT_MODEL, OpenAISettings, valid_base_url, valid_model
+from .settings import (ConfigurationUnavailable, DEFAULT_BASE_URL, DEFAULT_MINIMAX_BASE_URL,
+                       DEFAULT_MINIMAX_MODEL, DEFAULT_MODEL, OpenAISettings, valid_base_url, valid_model)
 
 SIZES = ("square", "landscape", "portrait")
 QUALITIES = ("standard", "high")
+PROVIDERS = ("openai", "minimax", "custom")
+CONFIG_VERSION = 2
+
+# Built-in starting points for the settings UI. They are defaults, not hidden
+# services: users still create and save an independent service (and may change
+# its address, models and capabilities) before anything can run.
+PROVIDER_PRESETS = (
+    {"id": "openai", "name": "OpenAI 图像", "base_url": DEFAULT_BASE_URL,
+     "models": [{"name": "gpt-image-1", "sizes": list(SIZES), "qualities": list(QUALITIES),
+                 "supports_edit": True}]},
+    {"id": "minimax", "name": "MiniMax 图像", "base_url": DEFAULT_MINIMAX_BASE_URL,
+     "models": [{"name": DEFAULT_MINIMAX_MODEL, "sizes": list(SIZES), "qualities": ["standard"],
+                 "supports_edit": False}]},
+    {"id": "custom", "name": "自定义兼容服务", "base_url": "", "models": []},
+)
 
 
 class ServiceError(Exception):
@@ -74,13 +90,17 @@ class ServiceCatalog:
                 if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid() or info.st_nlink != 1:
                     raise ConfigurationUnavailable()
                 data = json.load(source)
-            if (not isinstance(data, dict) or data.get("version") != 1 or
+            version = data.get("version") if isinstance(data, dict) else None
+            if (version not in (1, CONFIG_VERSION) or
                     not isinstance(data.get("signing_key"), str) or len(data["signing_key"]) != 64 or
                     any(char not in "0123456789abcdef" for char in data["signing_key"]) or
                     not isinstance(data.get("services"), list)):
                 raise ConfigurationUnavailable()
             ids = set()
             for service in data["services"]:
+                # v1 had one implicit protocol: an OpenAI Images-compatible endpoint.
+                if version == 1 and isinstance(service, dict):
+                    service["provider"] = "custom"
                 self._validate(service)
                 if service["id"] in ids or service["id"] == "environment":
                     raise ConfigurationUnavailable()
@@ -89,17 +109,19 @@ class ServiceCatalog:
             if selection is not None and (not isinstance(selection, dict) or set(selection) != {"service_id", "model_id"}
                                           or not all(isinstance(value, str) for value in selection.values())):
                 raise ConfigurationUnavailable()
+            if version == 1:
+                data["version"] = CONFIG_VERSION
             return data
         except FileNotFoundError:
             legacy = self.legacy._read_file()
             services = []
             if legacy:
-                services.append({"id": "legacy", "name": "默认图像服务", "enabled": True,
+                services.append({"id": "legacy", "provider": "custom", "name": "默认图像服务", "enabled": True,
                     "base_url": legacy.get("base_url", DEFAULT_BASE_URL), "api_key": legacy.get("api_key", ""),
                     "models": [default_model(legacy.get("model", DEFAULT_MODEL), editing=True, model_id="legacy-model")]})
             environment = self._environment()
             first = environment or (services[0] if services else None)
-            data = {"version": 1, "signing_key": secrets.token_hex(32), "services": services,
+            data = {"version": CONFIG_VERSION, "signing_key": secrets.token_hex(32), "services": services,
                     "default": {"service_id": first["id"], "model_id": first["models"][0]["id"]} if first else None}
             self._write(data)
             return data
@@ -110,7 +132,8 @@ class ServiceCatalog:
         if not any(os.environ.get(f"IMAGENIA_OPENAI_{name}", "").strip() for name in ("API_KEY", "BASE_URL", "MODEL")):
             return None
         key, _, url, model = self.legacy.effective()
-        return {"id": "environment", "name": "环境配置", "base_url": url, "api_key": key or "", "enabled": True,
+        return {"id": "environment", "provider": "custom", "name": "环境配置", "base_url": url,
+                "api_key": key or "", "enabled": True,
                 "models": [default_model(model, editing=True, model_id="environment-model")]}
 
     def _all(self, document: dict[str, Any]) -> list[dict[str, Any]]:
@@ -119,8 +142,9 @@ class ServiceCatalog:
 
     @staticmethod
     def _validate(service: Any) -> None:
-        if (not isinstance(service, dict) or set(service) != {"id", "name", "base_url", "api_key", "enabled", "models"} or
+        if (not isinstance(service, dict) or set(service) != {"id", "provider", "name", "base_url", "api_key", "enabled", "models"} or
                 not isinstance(service["id"], str) or not 0 < len(service["id"]) <= 128 or
+                not isinstance(service["provider"], str) or service["provider"] not in PROVIDERS or
                 not isinstance(service["name"], str) or not service["name"].strip() or len(service["name"]) > 100 or
                 not valid_base_url(service["base_url"]) or type(service["enabled"]) is not bool or
                 not isinstance(service["api_key"], str) or (service["api_key"] and not valid_key(service["api_key"])) or
@@ -149,7 +173,8 @@ class ServiceCatalog:
                 public.update(configured=bool(service["api_key"]), read_only=service["id"] == "environment")
                 public["active_jobs"] = self._busy(database, service["id"]) if database is not None else 0
                 services.append(public)
-            return {"services": services, "default": data["default"]}
+            return {"services": services, "default": data["default"],
+                    "providers": copy.deepcopy(list(PROVIDER_PRESETS))}
 
     @staticmethod
     def _busy(database, service_id: str) -> int:
@@ -159,7 +184,7 @@ class ServiceCatalog:
     def save(self, request: Any, database, service_id: str | None = None) -> dict[str, Any]:
         with self.lock:
             data = self._load()
-            if not isinstance(request, dict) or set(request) - {"name", "base_url", "api_key", "enabled", "models"}:
+            if not isinstance(request, dict) or set(request) - {"provider", "name", "base_url", "api_key", "enabled", "models"}:
                 raise ServiceError("invalid_service")
             if service_id == "environment":
                 raise ServiceError("read_only_service", 409)
@@ -168,7 +193,8 @@ class ServiceCatalog:
                 raise ServiceError("service_not_found", 404)
             if old is None and len(data["services"]) >= 50:
                 raise ServiceError("service_limit", 409)
-            service = copy.deepcopy(old) if old else {"id": str(uuid.uuid4()), "enabled": True, "api_key": ""}
+            service = copy.deepcopy(old) if old else {"id": str(uuid.uuid4()), "provider": "custom",
+                                                     "enabled": True, "api_key": ""}
             service.update(request)
             # Empty key is only allowed when preserving an existing secret.
             if old and request.get("api_key") == "":
@@ -181,12 +207,13 @@ class ServiceCatalog:
                 raise ServiceError("invalid_api_key")
             if old and old["id"] == "legacy" and self._busy(database, "environment"):
                 if (service["api_key"] != old["api_key"] or service["base_url"] != old["base_url"] or
-                        service["models"][0]["name"] != old["models"][0]["name"]):
+                        service["provider"] != old["provider"] or service["models"][0]["name"] != old["models"][0]["name"]):
                     raise ServiceError("service_in_use", 409)
             if old and self._busy(database, service["id"]):
                 previous = {model["id"]: model["name"] for model in old["models"]}
                 current = {model["id"]: model["name"] for model in service["models"]}
                 if (service["api_key"] != old["api_key"] or service["base_url"] != old["base_url"] or
+                        service["provider"] != old["provider"] or
                         any(current.get(key) != value for key, value in previous.items())):
                     raise ServiceError("service_in_use", 409)
             if old:
@@ -258,10 +285,16 @@ class ServiceCatalog:
                     raise ServiceError("unsupported_options")
             if not service["api_key"]:
                 raise ServiceError("not_configured", 409)
-            connection = json.dumps([service["base_url"], service["api_key"], model["name"]], ensure_ascii=True).encode()
-            fingerprint = hmac.new(data["signing_key"].encode(), connection, hashlib.sha256).hexdigest()
+            # Keep the v1 tuple for custom services so an upgrade does not
+            # invalidate already-queued jobs. Other protocols append their kind.
+            connection = [service["base_url"], service["api_key"], model["name"]]
+            if service["provider"] != "custom":
+                connection.append(service["provider"])
+            fingerprint = hmac.new(data["signing_key"].encode(),
+                                   json.dumps(connection, ensure_ascii=True).encode(), hashlib.sha256).hexdigest()
             return {"service_id": service_id, "service_name": service["name"], "model_id": model_id,
-                    "model": model["name"], "base_url": service["base_url"], "api_key": service["api_key"],
+                    "model": model["name"], "provider": service["provider"],
+                    "base_url": service["base_url"], "api_key": service["api_key"],
                     "connection_fingerprint": fingerprint}
 
     def connection(self, service_id: str) -> tuple[str, str]:
@@ -282,7 +315,8 @@ class ServiceCatalog:
             values = self.legacy._read_file()
             service = next((item for item in data["services"] if item["id"] == "legacy"), None)
             if service is None:
-                service = {"id": "legacy", "name": "默认图像服务", "enabled": True, "api_key": "", "models": []}
+                service = {"id": "legacy", "provider": "custom", "name": "默认图像服务",
+                           "enabled": True, "api_key": "", "models": []}
                 data["services"].append(service)
             service.update(api_key=values.get("api_key", ""), base_url=values.get("base_url", DEFAULT_BASE_URL),
                            models=[default_model(values.get("model", DEFAULT_MODEL), editing=True, model_id="legacy-model")])

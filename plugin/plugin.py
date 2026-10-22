@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from src.imagenia_plugin import create_app
-from src.imagenia_plugin.provider import OpenAIImageProvider
+from src.imagenia_plugin.provider import MiniMaxImageProvider, OpenAIImageProvider
 
 
 def data_directory() -> Path:
@@ -56,8 +56,15 @@ class ImageniaPlugin:
                 base_url=lambda: app.settings.effective()[2],
                 model=lambda: app.settings.effective()[3])
             app.worker.provider = app.provider
-            app.provider_factory = lambda selected: OpenAIImageProvider(
-                lambda: selected["api_key"], base_url=selected["base_url"], model=selected["model"])
+
+            def provider_factory(selected):
+                if selected.get("provider") == "minimax":
+                    return MiniMaxImageProvider(lambda: selected["api_key"],
+                                                base_url=selected["base_url"], model=selected["model"])
+                return OpenAIImageProvider(lambda: selected["api_key"],
+                                           base_url=selected["base_url"], model=selected["model"])
+
+            app.provider_factory = provider_factory
             # Import FastAPI only inside QwenPaw; the local HTTP seam needs none.
             from src.imagenia_plugin.qwenpaw_router import build_router
 

@@ -1,6 +1,6 @@
 # Imagenia V1 产品与技术规格
 
-> 本文保留 V1 原始规格。2026-10-21 确认的多服务／多模型扩展已实现，其配置、任务绑定与迁移规则以 [ADR 0005](adr/0005-multiple-image-services.md) 和 [插件 README](../plugin/README.md#多图像服务与模型选择) 为准；替代本文中的单份配置、固定模型以及多模型选择不在范围的限制。
+> 本文保留 V1 原始规格。2026-10-21 确认的多服务／多模型扩展已实现，其配置、任务绑定与迁移规则以 [ADR 0005](adr/0005-multiple-image-services.md) 和 [插件 README](../plugin/README.md#多图像服务与模型选择) 为准；替代本文中的单份配置、固定模型以及多模型选择不在范围的限制。2026-10-22 新增的 OpenAI／MiniMax 内置协议与预设见 [ADR 0006](adr/0006-built-in-image-provider-presets.md)。
 
 - 状态：已发布到 GitHub Issue #1，测试接缝已确认
 - 日期：2026-09-22

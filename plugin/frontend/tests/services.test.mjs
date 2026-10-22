@@ -5,16 +5,21 @@ import { initialServiceSelection, rememberServiceSelection, selectedServiceModel
 import { enqueueGeneration, getJob } from "../src/services/generation.ts"
 
 const model = { id: "model-a", name: "image-model", sizes: ["square"], qualities: ["standard"], supports_edit: false }
-const service = { id: "a", name: "Service A", configured: true, enabled: true, read_only: false, active_jobs: 0, models: [model] }
-const catalog = { services: [service], default: { service_id: "a", model_id: "model-a" } }
+const service = { id: "a", provider: "openai", name: "Service A", configured: true, enabled: true, read_only: false, active_jobs: 0, models: [model] }
+const providers = [
+  { id: "openai", name: "OpenAI 图像", base_url: "https://api.openai.com/v1", models: [{ ...model, supports_edit: true }] },
+  { id: "minimax", name: "MiniMax 图像", base_url: "https://api.minimax.cn/v1", models: [{ ...model, name: "image-01" }] },
+  { id: "custom", name: "自定义兼容服务", base_url: "", models: [] },
+]
+const catalog = { services: [service], default: { service_id: "a", model_id: "model-a" }, providers }
 
 test("service CRUD/default are authenticated and connection checks happen only explicitly", async () => {
   const calls = []
   globalThis.localStorage = { getItem: () => "session-secret" }
   globalThis.fetch = async (url, init) => { calls.push({ url, init }); return Response.json(catalog) }
   await getServices()
-  await saveService({ name: "Service A", api_key: "sk-private", base_url: "https://a.example/v1", models: [model], enabled: true })
-  await saveService({ name: "renamed", base_url: "https://a.example/v1", models: [model], enabled: true }, "a")
+  await saveService({ provider: "minimax", name: "Service A", api_key: "sk-private", base_url: "https://a.example/v1", models: [model], enabled: true })
+  await saveService({ provider: "custom", name: "renamed", base_url: "https://a.example/v1", models: [model], enabled: true }, "a")
   await setDefaultService(catalog.default)
   assert.ok(calls.every(call => !call.url.endsWith("/test")))
   await testServiceConnection("a")
@@ -24,6 +29,7 @@ test("service CRUD/default are authenticated and connection checks happen only e
     ["PUT", "/api/imagenia/services/default"], ["POST", "/api/imagenia/services/a/test"], ["DELETE", "/api/imagenia/services/a"],
   ])
   assert.ok(calls.every(call => call.init.headers.Authorization === "Bearer session-secret" && !call.url.includes("sk-private")))
+  assert.equal(JSON.parse(calls[1].init.body).provider, "minimax")
   assert.equal(JSON.parse(calls[2].init.body).api_key, undefined)
 })
 

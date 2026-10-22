@@ -35,6 +35,22 @@ def test_edit_posts_png_to_configured_images_endpoint(monkeypatch):
         assert value in seen["data"]
 
 
+def test_edit_posts_jpeg_sources_with_their_real_media_type(monkeypatch):
+    seen = {}
+    jpeg = (b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+            b"\xff\xc0\x00\x11\x08\x00\x10\x00\x10\x03\x01\x11\x00\x02\x11\x00\x03\x11\x00\xff\xd9")
+
+    def urlopen(request, timeout):
+        seen.update(data=request.data)
+        return io.BytesIO(json.dumps({"data": [{"b64_json": base64.b64encode(jpeg).decode()}]}).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    provider = OpenAIImageProvider(lambda: "secret", base_url="https://example.test/v1", model="gpt-image-1")
+    assert provider.edit("edit", jpeg, size="square", quality="standard") == jpeg
+    assert b'name="image"; filename="source.jpg"' in seen["data"]
+    assert b"Content-Type: image/jpeg\r\n\r\n" + jpeg in seen["data"]
+
+
 def test_edit_rejects_missing_key_and_maps_provider_errors(monkeypatch):
     provider = OpenAIImageProvider(lambda: None)
     with pytest.raises(ProviderError, match="not_configured"):

@@ -87,9 +87,9 @@ def build_router(app: ImageniaApp) -> APIRouter:
 
     @router.api_route("/assets/{asset_id}/content", methods=["GET"])
     async def asset_content(asset_id: str) -> Response:
-        status, content = app.asset_content(asset_id)
+        status, content, mime = app.asset_content(asset_id)
         return Response(content if status == 200 else b'{"error":{"code":"not_found"}}',
-                        status_code=status, media_type="image/png" if status == 200 else "application/json")
+                        status_code=status, media_type=mime if status == 200 else "application/json")
 
     @router.api_route("/jobs/generate", methods=["POST"])
     async def generate(request: Request) -> JSONResponse:

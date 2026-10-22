@@ -9,7 +9,7 @@ Imagenia 是面向 QwenPaw 2.2.1 的本地 AI 图像工作台。当前仓库包�
 - `plugin/frontend/dist/index.js`：不引入工作台或第三方运行时的宿主薄入口。宿主通过 Blob `import()` 加载它，它使用 `window.QwenPaw.host.React` 注册 `/imagenia` 路由与侧边栏菜单，并渲染 iframe。
 - `plugin/frontend/dist/app/index.html` 和 `assets/`：同源 iframe 中的独立 SPA，包含自己的 React/ReactDOM、shadcn/Radix、Tailwind CSS 和字体；静态资源使用相对路径，不与宿主共享 React dispatcher。入口 URL 为 `/api/frontend_plugin/imagenia/files/frontend/dist/app/index.html`。
 
-`plugin.json` 仍以 `frontend/dist/index.js` 为插件入口。不要把工作台组件导入宿主入口，也不要将 iframe SPA 的 React 设为 external。当前 iframe 从同源插件 API 读取和保存全局 OpenAI 配置，使用 QwenPaw 2.2.1 的 `qwenpaw_auth_token` 发送 Bearer 认证；图片与任务使用后端资源；收藏、删除由同源接口处理。宿主联调还需验证实际 iframe 的读写鉴权与 401 反馈。
+`plugin.json` 仍以 `frontend/dist/index.js` 为插件入口。不要把工作台组件导入宿主入口，也不要将 iframe SPA 的 React 设为 external。当前 iframe 从同源插件 API 读取和保存图像服务配置，使用 QwenPaw 2.2.1 的 `qwenpaw_auth_token` 发送 Bearer 认证；图片与任务使用后端资源；收藏、删除由同源接口处理。宿主联调还需验证实际 iframe 的读写鉴权与 401 反馈。
 
 工作台沿用原型组件；生成表单、任务、图片资料库已接入真实后端：
 
@@ -93,13 +93,54 @@ python -m pytest plugin/tests -q
 
 ## 多图像服务与模型选择
 
-配置面板可新增多套 OpenAI Images 兼容服务，每套配置独立名称、API 根地址、API Key 和模型列表。每个模型勾选支持的方形／横图／竖图、标准／高质量和图片编辑；新模型默认关闭编辑。兼容服务需支持目前的图像生成／multipart 编辑请求以及 base64 PNG 响应，不自动适配其他协议。
+配置面板可新增多套图像服务，每套配置独立类型、名称、API 根地址、API Key 和模型列表。每个模型声明支持的方形／横图／竖图、标准／高质量和图片编辑；新模型默认关闭编辑。服务类型在创建时确定：
+
+| 类型 | 协议与默认地址 | 预设模型 | 画幅映射 | 质量 | 图片编辑 |
+| --- | --- | --- | --- | --- | --- |
+| `openai` | `POST {base_url}/images/generations`；`https://api.openai.com/v1` | `gpt-image-1` | 1024×1024、1536×1024、1024×1536 | `standard`→`medium`，`high`→`high` | 支持 multipart `/images/edits` |
+| `minimax` | `POST {base_url}/image_generation`；`https://api.minimax.cn/v1`（国际版 `https://api.minimax.io/v1`） | `image-01` | `1:1`、`16:9`、`9:16` | 无 API 参数；预设只声明 `standard` | 不支持 |
+| `custom` | 任意 OpenAI Images 兼容根地址 | 用户填写 | 现有映射 | 现有映射 | 由模型能力声明决定 |
+
+OpenAI 预设使用 `gpt-image-1`。官方仍列出 `dall-e-3` 等旧模型，但它们的尺寸（如 1792×1024）和质量（`hd`）与工作台固定的画幅／质量映射不同，因此未加入预设。新增服务默认是“自定义”，保持原有行为；选择 OpenAI 或 MiniMax 会填入默认名称、地址和模型，保存前仍可修改。自定义服务需支持当前的生成／multipart 编辑请求和 `data[0].b64_json` 响应。界面不允许修改已保存服务的类型；需要切换协议时新增服务。`GET /api/imagenia/services` 的 `providers` 字段返回上述预设（不含密钥），供前端创建表单使用。
+
+MiniMax 的原生接口返回 `data.image_base64` 中的 JPEG；工作线程按真实字节识别 PNG／JPEG，保存为 `.png` 或 `.jpg` 并记录 `mime_type`。MiniMax 没有编辑接口，因此其模型不声明编辑能力。质量字段不会发给 MiniMax；即使手工声明 `high`，实际请求也没有质量差异。
 
 保存后可设置全局默认服务／模型，或在生成表单中自行选择。浏览器记住最近选择；失效、停用或不支持编辑时要求重新选择，不自动切换服务。编辑可使用其他服务的模型，原图保留。任务和图片详情显示提交时的服务名称及模型；失败任务可恢复原参数到表单，确认后再提交。
 
-每个任务绑定服务、模型和地址／密钥／模型的连接指纹。存在未完成任务时，后端拒绝更改地址、Key、移除或重命名原有模型及删除服务；新增模型、改服务名称、调整能力声明和停用仍可进行。停用仅阻止新任务，排队任务继续完成。配置在运行期间被外部修改或重启后发生变化时，未执行任务标记 `configuration_changed`；不重试、不自动切换。
+每个任务绑定服务、模型和类型／地址／密钥／模型的连接指纹。存在未完成任务时，后端拒绝更改地址、Key、移除或重命名原有模型及删除服务；新增模型、改服务名称、调整能力声明和停用仍可进行。停用仅阻止新任务，排队任务继续完成。配置在运行期间被外部修改或重启后发生变化时，未执行任务标记 `configuration_changed`；不重试、不自动切换。
 
-服务配置保存在持久化数据目录 `config/services.json`（目录 `0700`、文件 `0600`），HTTP 不返回密钥。务必把整个数据目录保存在 Docker 持久化挂载中。旧 `config/openai.json` 首次迁移为“默认图像服务”，保留兼容设置接口；已有编辑能力保留。环境变量 `IMAGENIA_OPENAI_*` 形成只读“环境配置”，不把环境密钥复制到文件；环境中未指定的字段继续遵循旧配置的回退规则。
+服务配置保存在持久化数据目录 `config/services.json`（目录 `0700`、文件 `0600`），HTTP 不返回密钥。配置格式为版本 2：
+
+```json
+{
+  "version": 2,
+  "signing_key": "<插件生成的 64 位十六进制字符串>",
+  "services": [
+    {
+      "id": "uuid",
+      "provider": "openai",
+      "name": "OpenAI 图像",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "YOUR_OPENAI_API_KEY",
+      "enabled": true,
+      "models": [
+        {
+          "id": "uuid",
+          "name": "gpt-image-1",
+          "sizes": ["square", "landscape", "portrait"],
+          "qualities": ["standard", "high"],
+          "supports_edit": true
+        }
+      ]
+    }
+  ],
+  "default": {"service_id": "uuid", "model_id": "uuid"}
+}
+```
+
+`provider` 取值为 `openai`、`minimax` 或 `custom`。三套完整示例见 [docs/services-config-sample.json](../docs/services-config-sample.json)；其中的 `signing_key` 与 API Key 都是占位符，**不要直接复制到数据目录**——插件会生成自己的签名密钥，真实密钥应通过配置面板或环境变量提供。
+
+旧版本（`version: 1`）没有 `provider`，读取时按 `custom` 处理并保持原有连接指纹，因此升级不会使已排队任务失效；下一次保存写成版本 2。务必把整个数据目录保存在 Docker 持久化挂载中。旧 `config/openai.json` 首次迁移为“默认图像服务”，保留兼容设置接口；已有编辑能力保留。环境变量 `IMAGENIA_OPENAI_*` 形成只读“环境配置”，按 `custom` 类型工作，不把环境密钥复制到文件；环境中未指定的字段继续遵循旧配置的回退规则。
 
 旧设置接口 `/settings/openai` 继续返回原有单服务契约并作为旧配置的兼容镜像；新界面使用 `/services`。新目录存在后只迁移一次，不自动合并后来手动编辑的旧文件。删除旧服务会清除它的兼容文件；历史资产及服务名称快照保留。
 
@@ -107,16 +148,16 @@ python -m pytest plugin/tests -q
 
 | 接口 | 行为 |
 | --- | --- |
-| `GET /api/imagenia/services` | 服务列表、脱敏状态、模型、活动任务数和全局默认项 |
-| `POST /api/imagenia/services` | 新增服务 |
-| `PUT /api/imagenia/services/{id}` | 修改服务，省略 Key 时保留已有密钥 |
+| `GET /api/imagenia/services` | 服务列表、脱敏状态、类型、模型、活动任务数、全局默认项和内置预设 |
+| `POST /api/imagenia/services` | 新增服务；省略 `provider` 时按 `custom` 处理 |
+| `PUT /api/imagenia/services/{id}` | 修改服务，省略 Key 时保留已有密钥；有活动任务时不能更改类型 |
 | `DELETE /api/imagenia/services/{id}` | 无未完成任务时删除配置和密钥，保留资产／任务 |
 | `PUT /api/imagenia/services/default` | 设置 `{service_id, model_id}` 默认组合 |
 | `POST /api/imagenia/services/{id}/test` | 显式只读认证测试 |
 
 生成／编辑任务支持 `service_id` 和 `model_id`，前端每次显式发送。兼容旧客户端未传这两个字段时使用全局默认，禁止只传其中一个或任意覆盖模型名。模型声明的画幅、质量和编辑能力均由后端校验。
 
-新增回归：`python -m pytest plugin/tests/test_multi_services_http.py -q`、前端 `npm run test:services`。本地 fake 模式可测试完整设置、服务切换和跨服务编辑；正式宿主仍需验收 iframe 鉴权、真实兼容服务的生成／编辑和容器持久化。
+新增回归：`python -m pytest plugin/tests/test_multi_services_http.py plugin/tests/test_minimax_provider.py plugin/tests/test_image_formats.py -q`、前端 `npm run test:services`。本地 fake 模式可测试完整设置、服务切换和跨服务编辑；正式宿主仍需验收 iframe 鉴权、真实兼容服务的生成／编辑和容器持久化。
 
 ## 旧版 OpenAI 设置兼容接口（Issues #4、#12）
 
@@ -138,19 +179,19 @@ python -m pytest plugin/tests -q
 
 生成提交 `POST /api/imagenia/jobs/generate` 返回 `202` 与 `job_id`；后台独立单 worker 将任务从 `pending` 处理到 `running`、`succeeded` 或 `failed`，前端每 1.5 秒通过 `GET /api/imagenia/jobs/{job_id}` 轮询。重新打开页面时通过 `GET /api/imagenia/jobs` 恢复近期任务。成功后从 `GET /api/imagenia/assets` 刷新资料库，图片字节从需要同一 Bearer token 的 `/api/imagenia/assets/{id}/content` 获取；新资产高亮、不自动弹详情。资产文件按年月与 UUID 保存在插件数据目录，元数据在 SQLite 中。上次运行遗留的 `running` 标记为 `interrupted`，`pending` 恢复执行。队列最多允许 50 个待处理任务（第 51 个返回 429）。运行中任务的 10 分钟截止时间到达后标记为 `failed/timeout`；不会强杀可能已经发出计费请求的 provider 调用，单 worker 在该调用返回前不会处理下一任务，迟到的结果不得写入资产。provider 429、超时、不可用及非预期响应分别映射为 `rate_limited`、`timeout`、`service_unavailable`、`invalid_response`，错误详情不包含上游异常文本、密钥或内部路径。
 
-正式宿主使用任务提交时选定的服务和模型，旧配置默认模型为 `gpt-image-2.5`；画幅分别映射 1024×1024、1536×1024、1024×1536；质量 `standard` 映射 OpenAI 的 `medium`，`high` 对应 `high`。生成调用可能收费，请使用可用密钥和低成本提示词谨慎验证。端到端验收需在 QwenPaw iframe 验证任务提交、轮询、重启恢复、图片展示及登录失效后的安全反馈；本机自动化不代表宿主验收完成。
+正式宿主使用任务提交时选定的服务和模型，旧配置默认模型为 `gpt-image-2.5`；OpenAI 与自定义兼容服务将画幅映射为 1024×1024、1536×1024、1024×1536，质量 `standard` 映射 `medium`、`high` 对应 `high`。MiniMax 将画幅映射为 `1:1`、`16:9`、`9:16`，不发送质量字段。生成调用可能收费，请使用可用密钥和低成本提示词谨慎验证。端到端验收需在 QwenPaw iframe 验证任务提交、轮询、重启恢复、图片展示及登录失效后的安全反馈；本机自动化不代表宿主验收完成。
 
 接入兼容网关时请填写 API 根地址（包含 `/v1` 等必要前缀），不要填写 `/images/generations` 完整接口路径。连接测试仅能检验 `/models` 的认证，不保证网关支持图像生成；真实成功生图与计费行为需在宿主手动确认。
 
 ## 图片编辑与来源关系（Issue #7）
 
-从图片详情选择“以此编辑”会单独读取已有源图，提交 `POST /api/imagenia/jobs/edit`（`source_asset_id`、`prompt`、`size`、`quality`），返回 `202` 与 `job_id`。只接受插件已有且可读取的 PNG 资产，不接受上传、蒙版、多图、请求指定模型或任意文件路径。编辑复用单 worker 和状态轮询，provider 以 multipart/form-data 将原图发至配置的 `/images/edits`；正式调用可能产生费用。完成后新建 `kind=edited` 资产并保存直接 `source_asset_id`，原图与其文件保持不变。来源缺失时提交返回安全的 404；排队后来源消失则任务安全失败且不生成资产。编辑来源缩略图有独立临时 URL，关闭编辑或卸载时回收。
+从图片详情选择“以此编辑”会单独读取已有源图，提交 `POST /api/imagenia/jobs/edit`（`source_asset_id`、`prompt`、`size`、`quality`），返回 `202` 与 `job_id`。只接受插件已有且可读取的 PNG／JPEG 资产，不接受上传、蒙版、多图、请求指定模型或任意文件路径；multipart 使用来源图片的真实媒体类型。编辑复用单 worker 和状态轮询，provider 以 multipart/form-data 将原图发至配置的 `/images/edits`；正式调用可能产生费用。完成后新建 `kind=edited` 资产并保存直接 `source_asset_id`，原图与其文件保持不变。来源缺失时提交返回安全的 404；排队后来源消失则任务安全失败且不生成资产。编辑来源缩略图有独立临时 URL，关闭编辑或卸载时回收。
 
 本地 `python -m pytest plugin/tests -q` 覆盖成功、失败、原图保留、来源关系及无网络 multipart 请求。宿主验证时同步整个插件（含 `frontend/dist/`）并重启：从详情编辑已有图片，检查编辑任务状态、新资产、直接来源和原图未变；对已删除/不可读来源、失效登录和 provider 错误确认安全提示。自动测试不代表真实宿主与网关的编辑端点已验证，验证通过前不要关闭 #7。
 
 ## 存储权限与并发核查（Issue #14）
 
-首次启动时，插件数据根目录及图片子目录限制为 `0700`，SQLite 与新写入 PNG 为 `0600`；在默认权限掩码 `022` 下也生效。对旧目录及数据库/图片先核验所有权、类型和符号链接，再收紧权限；不更改插件数据目录**以外**的父目录。遇到不属于当前进程的路径、符号链接或硬链接会安全拒绝启动，不应对任意自定义路径盲目 `chmod`。更改旧权限前，请由管理员确认 `IMAGENIA_DATA_DIR` 指向正确的插件专属目录；无法修复时需先安全迁移数据，勿改用放宽权限绕过。已有 `config/` 和私有配置文件继续由配置模块检查权限。
+首次启动时，插件数据根目录及图片子目录限制为 `0700`，SQLite 与新写入图片文件为 `0600`；在默认权限掩码 `022` 下也生效。对旧目录及数据库/图片先核验所有权、类型和符号链接，再收紧权限；不更改插件数据目录**以外**的父目录。遇到不属于当前进程的路径、符号链接或硬链接会安全拒绝启动，不应对任意自定义路径盲目 `chmod`。更改旧权限前，请由管理员确认 `IMAGENIA_DATA_DIR` 指向正确的插件专属目录；无法修复时需先安全迁移数据，勿改用放宽权限绕过。已有 `config/` 和私有配置文件继续由配置模块检查权限。
 
 运行 `python plugin/tests/storage_probe.py` 可获得可重跑的本地基线：阻塞 fake provider 期间 50 次 `GET /assets` 延迟分布，以及人为持有约 120 ms `BEGIN EXCLUSIVE` 写事务时的读等待。一次本地运行采用 `journal_mode=delete`，等待 provider 时 GET p50/p95/max 为 0.034/0.050/0.146 ms，人为长写事务时约 129 ms；该数值不代表真实宿主负载。worker 在 provider 调用前已提交任务领取事务，没有证据证明启用 WAL 必要，暂不修改日志模式。
 
@@ -175,7 +216,7 @@ SQLite schema 当前版本为 **v4**。首次安装自动建立 v1，再按顺�
 ├── config/services.json     # 多服务配置、Key、模型与默认项
 ├── config/openai.json       # 迁移保留的旧设置兼容文件（如存在）
 ├── imagenia.sqlite3         # 图片元数据、收藏、提示词和任务
-└── images/YYYY/MM/UUID.png  # 生成或编辑结果
+└── images/YYYY/MM/UUID.png|jpg  # 生成或编辑结果（按 provider 返回格式）
 ```
 
 **Docker 部署必须确认上述数据目录位于实际的持久化挂载中**；仅安装到这个路径不等于已配置挂载。如果插件安装目录已经持久化，`data/` 会随它保留。也可以在现有 QwenPaw Compose 服务的 `environment` 中明确指定：
@@ -195,6 +236,6 @@ environment:
 
 ### 停用和卸载
 
-插件停用会停止领取新任务，运行中任务标记 `failed/interrupted` 且不会自动重试；已有 `pending` 在下次启用时恢复。插件自身的 `unregister()` **不会删除**密钥配置、SQLite 或 PNG，重新注册同一数据目录可继续使用。卸载由宿主管理插件代码/路由；插件不主动清理数据，**但宿主若删除整个插件安装目录，也会删除其中的 `data/`**。需要跨插件卸载保留数据时，将 `IMAGENIA_DATA_DIR` 指向插件安装目录外的独立持久化目录。卸载前先备份并核对持久化挂载；需要彻底删除数据时由管理员在卸载和备份确认后单独清理，不自动执行不可逆操作。
+插件停用会停止领取新任务，运行中任务标记 `failed/interrupted` 且不会自动重试；已有 `pending` 在下次启用时恢复。插件自身的 `unregister()` **不会删除**密钥配置、SQLite 或图片文件，重新注册同一数据目录可继续使用。卸载由宿主管理插件代码/路由；插件不主动清理数据，**但宿主若删除整个插件安装目录，也会删除其中的 `data/`**。需要跨插件卸载保留数据时，将 `IMAGENIA_DATA_DIR` 指向插件安装目录外的独立持久化目录。卸载前先备份并核对持久化挂载；需要彻底删除数据时由管理员在卸载和备份确认后单独清理，不自动执行不可逆操作。
 
 本地回归 `python -m pytest plugin/tests -q` 覆盖首次安装、v1/v2 升级、幂等重启、迁移回滚与阻止注册、约束/外键/索引、配置/任务/收藏/图片保留、模拟停用和重装；不模拟 QwenPaw 的真实卸载文件策略。真机验收请在测试 volume 上备份后，核对覆盖安装、重启、停用与重装前后的配置状态、任务、收藏、图片可读性和文件权限，并确认卸载是否会连带删除默认目录，再决定生产数据路径。

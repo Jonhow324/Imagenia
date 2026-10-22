@@ -6,6 +6,7 @@ import sqlite3
 import stat
 from pathlib import Path
 
+from .image_formats import IMAGE_SUFFIXES
 from .jobs import now
 
 
@@ -27,7 +28,7 @@ def delete_asset(db: sqlite3.Connection, data_dir: Path, asset_id: str) -> bool:
     root = data_dir / "images"
     path = data_dir / row["file_path"]
     # Constrain to the image tree, not merely to the plugin's data directory.
-    if (path.suffix != ".png" or not path.resolve().is_relative_to(root.resolve())
+    if (path.suffix not in IMAGE_SUFFIXES or not path.resolve().is_relative_to(root.resolve())
             or path.parent.is_symlink() or path.is_symlink()):
         raise UnsafeAssetPath()
     tombstone = None

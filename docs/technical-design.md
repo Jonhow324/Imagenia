@@ -1,7 +1,7 @@
 # Imagenia 技术设计
 
 - 日期：2026-09-22
-- 状态：V1 核心与多服务扩展已实现；多服务选择和 schema v4 见 [ADR 0005](adr/0005-multiple-image-services.md)。
+- 状态：V1 核心与多服务扩展已实现；多服务选择和 schema v4 见 [ADR 0005](adr/0005-multiple-image-services.md)，内置 OpenAI／MiniMax 协议与预设见 [ADR 0006](adr/0006-built-in-image-provider-presets.md)。
 
 ## 1. 模块边界
 
@@ -10,7 +10,7 @@ plugin.py
 ├── config       全局配置读取、保存和脱敏状态
 ├── api          HTTP 路由与请求校验
 ├── jobs         SQLite 任务队列和单 worker
-├── provider     OpenAI Images API 适配器
+├── provider     OpenAI Images、MiniMax 与自定义兼容适配器
 ├── assets       图片文件存储与 ImageAsset 服务
 ├── repositories SQLite Repository 和迁移
 └── frontend     单页面生成、编辑、瀑布流工作台
@@ -36,7 +36,7 @@ quality            standard | high
 width              整数
 height             整数
 file_path          插件数据目录下的相对路径
-mime_type          例如 image/png
+mime_type          image/png 或 image/jpeg（按 provider 返回的真实格式）
 file_size          字节数
 is_favorite        布尔值
 favorited_at      可空时间
@@ -71,6 +71,37 @@ finished_at        可空时间
 
 任务与资产是一对零或一：一个任务最多产生一个结果资产。
 
+### `config/services.json`
+
+```json
+{
+  "version": 2,
+  "signing_key": "<插件生成的 64 位十六进制字符串>",
+  "services": [
+    {
+      "id": "uuid 或 legacy/environment",
+      "provider": "openai | minimax | custom",
+      "name": "显示名称",
+      "base_url": "API 根地址",
+      "api_key": "私有机密",
+      "enabled": true,
+      "models": [
+        {
+          "id": "uuid",
+          "name": "提供方模型名",
+          "sizes": ["square", "landscape", "portrait"],
+          "qualities": ["standard", "high"],
+          "supports_edit": false
+        }
+      ]
+    }
+  ],
+  "default": {"service_id": "uuid", "model_id": "uuid"}
+}
+```
+
+`provider` 决定适配器和预设；`openai`／`minimax` 的默认值见 `GET /api/imagenia/services` 的 `providers` 字段。`custom` 为任意 OpenAI Images 兼容服务。版本 1 文件读取时把已有服务视为 `custom`，连接指纹不变；下次写入升级为版本 2。目录权限 `0700`、文件权限 `0600`，HTTP 永不返回 `api_key` 或 `signing_key`。完整样例见 [services-config-sample.json](services-config-sample.json)，其中密钥均为占位符。
+
 ## 3. API 契约
 
 ```text
@@ -85,6 +116,12 @@ DELETE /api/imagenia/assets/{asset_id}
 GET   /api/imagenia/settings
 PUT   /api/imagenia/settings/openai
 POST  /api/imagenia/settings/openai/test
+GET   /api/imagenia/services
+POST  /api/imagenia/services
+PUT   /api/imagenia/services/{service_id}
+DELETE /api/imagenia/services/{service_id}
+PUT   /api/imagenia/services/default
+POST  /api/imagenia/services/{service_id}/test
 ```
 
 创建任务返回 `202 Accepted`：
@@ -110,7 +147,7 @@ POST  /api/imagenia/settings/openai/test
 
 单页面包含生成/编辑表单、任务状态、瀑布流和详情面板。前端提交后每 1～2 秒轮询 Job；成功后更新并高亮新资产，不自动打开详情。编辑只能从已有资产详情进入，并创建新资产。
 
-第一版表单只开放提示词、`square/landscape/portrait` 和 `standard/high`。模型由后端配置，不允许用户自由输入。
+第一版表单只开放提示词、`square/landscape/portrait`、`standard/high` 以及服务目录中的服务／模型选择。模型由后端配置，不允许用户自由输入。
 
 实现功能页面前先建立独立的 UI 基线：确定工作台信息架构、关键流程线框、颜色与间距等设计令牌，以及按钮、输入框、图片卡片、任务状态、详情面板和确认对话框的组件规范。设计必须覆盖空状态、加载、排队、生成中、失败、无配置、无结果和删除确认，不应只规定一组视觉风格。
 

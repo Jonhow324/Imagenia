@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import struct
 import time
 import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .image_formats import IMAGE_SUFFIXES, sniff_image
 from .provider import ImageProvider, ProviderError
 from .private_storage import private_directory
 from .settings import DEFAULT_MODEL
@@ -21,20 +21,22 @@ from .storage import open_database
 JOB_TIMEOUT_SECONDS = 600
 
 
-def source_image(db: sqlite3.Connection, data_dir: Path, asset_id: str) -> bytes:
-    """Read a current, plugin-owned PNG; never trust a persisted path blindly."""
+def source_image(db: sqlite3.Connection, data_dir: Path, asset_id: str) -> tuple[bytes, str]:
+    """Read a current, plugin-owned PNG/JPEG; never trust a persisted path blindly."""
     row = db.execute("SELECT file_path FROM image_assets WHERE id=?", (asset_id,)).fetchone()
     if row is None:
         raise ProviderError("source_unavailable")
     try:
         root = (data_dir / "images").resolve()
         path = (data_dir / row["file_path"]).resolve()
-        if not path.is_relative_to(root) or path.suffix != ".png" or path.stat().st_size > 25 * 1024 * 1024:
+        if not path.is_relative_to(root) or path.suffix not in IMAGE_SUFFIXES or path.stat().st_size > 25 * 1024 * 1024:
             raise ProviderError("source_unavailable")
         content = path.read_bytes()
-        if len(content) > 25 * 1024 * 1024 or content[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR":
+        image_format = sniff_image(content)
+        if (len(content) > 25 * 1024 * 1024 or image_format is None
+                or (path.suffix != image_format.suffix and not (image_format.suffix == ".jpg" and path.suffix == ".jpeg"))):
             raise ProviderError("source_unavailable")
-        return content
+        return content, image_format.mime
     except OSError:
         raise ProviderError("source_unavailable") from None
 
@@ -139,7 +141,7 @@ class GenerationWorker:
                     active_model = getattr(provider, "model", DEFAULT_MODEL)
                     active_model = active_model() if callable(active_model) else active_model
                 if job["kind"] == "edit":
-                    source = source_image(db, self.data_dir, job["source_asset_id"])
+                    source, _ = source_image(db, self.data_dir, job["source_asset_id"])
                     content = provider.edit(job["prompt"], source, size=options["size"], quality=options["quality"])
                 else:
                     content = provider.generate(job["prompt"], size=options["size"], quality=options["quality"])
@@ -147,18 +149,17 @@ class GenerationWorker:
                     raise ProviderError("interrupted")
                 if time.monotonic() >= deadline:
                     raise ProviderError("timeout")
-                if not isinstance(content, bytes) or len(content) > 25 * 1024 * 1024 or len(content) < 24 or content[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR":
+                image_format = sniff_image(content) if isinstance(content, bytes) and len(content) <= 25 * 1024 * 1024 else None
+                if image_format is None or not 0 < image_format.width <= 8192 or not 0 < image_format.height <= 8192:
                     raise ProviderError("invalid_image")
-                width, height = struct.unpack(">II", content[16:24])
-                if not 0 < width <= 8192 or not 0 < height <= 8192:
-                    raise ProviderError("invalid_image")
+                width, height = image_format.width, image_format.height
                 asset_id = str(uuid.uuid4())
                 timestamp = now()
                 date = datetime.now(UTC)
                 directory = self.data_dir / "images" / f"{date:%Y}" / f"{date:%m}"
                 private_directory(directory.parent)
                 private_directory(directory)
-                target = directory / f"{asset_id}.png"
+                target = directory / f"{asset_id}{image_format.suffix}"
                 relative = target.relative_to(self.data_dir).as_posix()
                 try:
                     if self._stop.is_set():
@@ -180,10 +181,11 @@ class GenerationWorker:
                         db.execute("""INSERT INTO image_assets
                             (id,kind,source_asset_id,prompt,model,size,quality,width,height,file_path,
                             mime_type,file_size,created_at,updated_at,service_id,service_name,model_id)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,'image/png',?,?,?,?,?,?)""",
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                             (asset_id, "edited" if job["kind"] == "edit" else "generated", job["source_asset_id"],
                              job["prompt"], active_model, options["size"], options["quality"], width, height,
-                             relative, len(content), timestamp, timestamp, job["service_id"], job["service_name"], job["model_id"]))
+                             relative, image_format.mime, len(content), timestamp, timestamp,
+                             job["service_id"], job["service_name"], job["model_id"]))
                         if self._stop.is_set():
                             raise ProviderError("interrupted")
                         if time.monotonic() >= deadline:

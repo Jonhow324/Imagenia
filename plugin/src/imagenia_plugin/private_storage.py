@@ -6,6 +6,18 @@ import stat
 import sqlite3
 from pathlib import Path
 
+from .image_formats import IMAGE_SUFFIXES
+
+
+def _image_name(name: str) -> bool:
+    return name.endswith(IMAGE_SUFFIXES)
+
+
+def _tombstone(name: str) -> bool:
+    if not name.startswith(".") or not name.endswith(".deleting"):
+        return False
+    return name[1:-len(".deleting")].endswith(IMAGE_SUFFIXES)
+
 
 def private_directory(path: Path) -> None:
     # Parents can be supplied by the host; never change their permissions.
@@ -39,7 +51,7 @@ def private_images(data_dir: Path) -> None:
         for month in year.iterdir():
             private_directory(month)
             for image in month.iterdir():
-                if not (image.name.endswith(".png") or (image.name.startswith(".") and image.name.endswith(".png.deleting"))):
+                if not (_image_name(image.name) or _tombstone(image.name)):
                     raise RuntimeError("Unexpected file in plugin image storage")
                 private_file(image)
 
@@ -50,7 +62,7 @@ def recover_deleted_images(db: sqlite3.Connection, data_dir: Path) -> None:
     for year in root.iterdir():
         for month in year.iterdir():
             for tombstone in month.iterdir():
-                if not (tombstone.name.startswith(".") and tombstone.name.endswith(".png.deleting")):
+                if not _tombstone(tombstone.name):
                     continue
                 original = tombstone.with_name(tombstone.name[1:-len(".deleting")])
                 relative = original.relative_to(data_dir).as_posix()

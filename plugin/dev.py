@@ -14,7 +14,7 @@ import zlib
 
 from src.imagenia_plugin import create_app
 from src.imagenia_plugin.app import ImageniaApp
-from src.imagenia_plugin.provider import OpenAIImageProvider
+from src.imagenia_plugin.provider import OpenAIImageProvider, provider_for
 
 
 class PreviewImageProvider:
@@ -99,8 +99,7 @@ def create_dev_app():
                 app.provider = OpenAIImageProvider(lambda: app.settings.effective()[0],
                     base_url=lambda: app.settings.effective()[2], model=lambda: app.settings.effective()[3])
                 app.worker.provider = app.provider
-                app.provider_factory = lambda selected: OpenAIImageProvider(
-                    lambda: selected["api_key"], base_url=selected["base_url"], model=selected["model"])
+                app.provider_factory = provider_for
             server.state.imagenia = app
             # Register once per process; reload starts a fresh process and lifespan.
             server.include_router(build_router(app), prefix="/api/imagenia")

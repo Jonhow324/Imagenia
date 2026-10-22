@@ -66,9 +66,9 @@ class ImageniaApp:
         path = scope.get("path", "")
         body = await self._read_body(receive)
         if method == "GET" and path.startswith("/api/imagenia/assets/") and path.endswith("/content"):
-            status, content = self.asset_content(path.split("/")[-2])
+            status, content, mime = self.asset_content(path.split("/")[-2])
             await send({"type": "http.response.start", "status": status,
-                        "headers": [(b"content-type", b"image/png" if status == 200 else b"application/json")]})
+                        "headers": [(b"content-type", mime.encode("ascii") if status == 200 else b"application/json")]})
             await send({"type": "http.response.body", "body": content if status == 200 else b'{"error":{"code":"not_found"}}'})
             return
         if method == "POST" and path == "/api/imagenia/settings/openai/test":
@@ -170,12 +170,13 @@ class ImageniaApp:
                 "model_id": row["model_id"], "model": row["model"],
                 "options": json.loads(row["retry_options"]) if row["retry_options"] else None}
 
-    def asset_content(self, asset_id: str) -> tuple[int, bytes]:
+    def asset_content(self, asset_id: str) -> tuple[int, bytes, str]:
         self._trace_thread("content")
         try:
-            return 200, source_image(self.database, self.data_dir, asset_id)
+            content, mime = source_image(self.database, self.data_dir, asset_id)
+            return 200, content, mime
         except ProviderError:
-            return 404, b""
+            return 404, b"", "application/json"
 
     def _settings_unavailable(self) -> tuple[int, dict[str, Any]]:
         return 503, {"error": {"code": "configuration_unavailable", "message": "Configuration is unavailable"}}
