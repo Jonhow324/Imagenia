@@ -70,7 +70,28 @@ MIGRATION_V3 = (
     "CREATE INDEX assets_source ON image_assets(source_asset_id)",
 )
 
-MIGRATIONS = {1: (SCHEMA_V1,), 2: MIGRATION_V2, 3: MIGRATION_V3}
+MIGRATION_V4 = (
+    "ALTER TABLE generation_jobs ADD COLUMN service_id TEXT",
+    "ALTER TABLE generation_jobs ADD COLUMN service_name TEXT",
+    "ALTER TABLE generation_jobs ADD COLUMN model_id TEXT",
+    "ALTER TABLE generation_jobs ADD COLUMN model TEXT",
+    "ALTER TABLE generation_jobs ADD COLUMN connection_fingerprint TEXT",
+    "ALTER TABLE generation_jobs ADD COLUMN retry_options TEXT",
+    "ALTER TABLE image_assets ADD COLUMN service_id TEXT",
+    "ALTER TABLE image_assets ADD COLUMN service_name TEXT",
+    "ALTER TABLE image_assets ADD COLUMN model_id TEXT",
+    "CREATE INDEX jobs_service_active ON generation_jobs(service_id, status)",
+    # The old request_json only contained size/quality. Keep it for an explicit
+    # user-reviewed resubmission, never for automatically executing an unbound job.
+    "UPDATE generation_jobs SET retry_options=request_json WHERE status='pending'",
+    # Old pending requests never recorded their endpoint/account. Do not guess.
+    """UPDATE generation_jobs SET status='failed', error_code='configuration_changed',
+        error_message='任务缺少服务绑定，请确认服务配置后重新提交。',
+        finished_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), request_json=NULL
+        WHERE status='pending'""",
+)
+
+MIGRATIONS = {1: (SCHEMA_V1,), 2: MIGRATION_V2, 3: MIGRATION_V3, 4: MIGRATION_V4}
 LATEST_VERSION = max(MIGRATIONS)
 
 

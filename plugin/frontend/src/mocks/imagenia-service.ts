@@ -4,6 +4,9 @@ export type ImageSize = "square" | "landscape" | "portrait"
 export type ImageQuality = "standard" | "high"
 
 export interface ImageAsset {
+  serviceId?: string
+  serviceName?: string
+  modelId?: string
   id: string
   kind: AssetKind
   prompt: string
@@ -18,6 +21,12 @@ export interface ImageAsset {
 }
 
 export interface GenerationJob {
+  serviceId?: string
+  serviceName?: string
+  modelId?: string
+  model?: string
+  sourceAssetId?: string
+  options?: { size: ImageSize; quality: ImageQuality }
   id: string
   kind: "generate" | "edit"
   prompt: string
@@ -28,6 +37,8 @@ export interface GenerationJob {
 }
 
 export interface GenerateInput {
+  serviceId?: string
+  modelId?: string
   prompt: string
   size: ImageSize
   quality: ImageQuality

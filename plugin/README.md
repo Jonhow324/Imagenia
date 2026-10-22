@@ -89,13 +89,42 @@ python -m pytest plugin/tests -q
 
 常规测试显式注入 `FakeImageProvider`，不访问 OpenAI、不会产生费用；QwenPaw 正式插件入口使用真实 `OpenAIImageProvider`。真实宿主验证记录见 `plugin/docs/qwenpaw-2.2.1-verification.md`。
 
-## 全局 OpenAI 配置（Issues #4、#12）
+## 多图像服务与模型选择
 
-QwenPaw 管理员可在 iframe 工作台的“配置”中保存或覆盖一份全局 API Key。优先使用插件进程中的 `IMAGENIA_OPENAI_API_KEY` 环境变量；否则使用插件数据目录的 `config/openai.json`。该目录权限为 `0700`，文件权限为 `0600`。设置 API 返回 `configured`、`source`（`none`/`file`/`environment`）以及当前生效的 `base_url` 和 `model`，不返回密钥。配置面板可保存 API Key、base URL 和默认模型；不输入新密钥时保存其余字段不会清除已有密钥。`IMAGENIA_OPENAI_BASE_URL`、`IMAGENIA_OPENAI_MODEL` 也分别覆盖文件值；默认分别为 `https://api.openai.com/v1` 和 `gpt-image-2.5`。生成请求仍不得指定模型。若环境变量已配置，保存文件不会覆盖当前生效的环境变量。请勿把数据目录或密钥纳入 Git。
+配置面板可新增多套 OpenAI Images 兼容服务，每套配置独立名称、API 根地址、API Key 和模型列表。每个模型勾选支持的方形／横图／竖图、标准／高质量和图片编辑；新模型默认关闭编辑。兼容服务需支持目前的图像生成／multipart 编辑请求以及 base64 PNG 响应，不自动适配其他协议。
 
-仅点击“测试连接”时后端才以当前生效密钥对当前 `base_url` 的 `GET /models` 发起一次只读认证请求（5 秒超时）；加载和保存配置都不会调用 OpenAI，测试不会请求图像生成。正式宿主中提交生成任务会调用 OpenAI Images API，**可能产生费用**。测试环境使用 fake provider 不会产生费用。
+保存后可设置全局默认服务／模型，或在生成表单中自行选择。浏览器记住最近选择；失效、停用或不支持编辑时要求重新选择，不自动切换服务。编辑可使用其他服务的模型，原图保留。任务和图片详情显示提交时的服务名称及模型；失败任务可恢复原参数到表单，确认后再提交。
 
-宿主验收：同步完整插件到 QwenPaw 2.2.1 后登录，打开 iframe；分别验证无配置、保存、覆盖、环境变量优先，以及点击测试连接的结果。登出或使登录 token 失效后，确认读取/写入遭宿主拒绝且页面显示安全的登录失效提示；本地 ASGI 测试不模拟宿主鉴权。
+每个任务绑定服务、模型和地址／密钥／模型的连接指纹。存在未完成任务时，后端拒绝更改地址、Key、移除或重命名原有模型及删除服务；新增模型、改服务名称、调整能力声明和停用仍可进行。停用仅阻止新任务，排队任务继续完成。配置在运行期间被外部修改或重启后发生变化时，未执行任务标记 `configuration_changed`；不重试、不自动切换。
+
+服务配置保存在持久化数据目录 `config/services.json`（目录 `0700`、文件 `0600`），HTTP 不返回密钥。务必把整个数据目录保存在 Docker 持久化挂载中。旧 `config/openai.json` 首次迁移为“默认图像服务”，保留兼容设置接口；已有编辑能力保留。环境变量 `IMAGENIA_OPENAI_*` 形成只读“环境配置”，不把环境密钥复制到文件；环境中未指定的字段继续遵循旧配置的回退规则。
+
+旧设置接口 `/settings/openai` 继续返回原有单服务契约并作为旧配置的兼容镜像；新界面使用 `/services`。新目录存在后只迁移一次，不自动合并后来手动编辑的旧文件。删除旧服务会清除它的兼容文件；历史资产及服务名称快照保留。
+
+点击某一服务的“测试已保存的连接”只向该服务请求 `GET /models`；加载、保存、设置默认都不发起外部请求。只读认证通过不等于模型一定能生成或编辑，能力由用户配置，实际任务由用户显式提交。
+
+| 接口 | 行为 |
+| --- | --- |
+| `GET /api/imagenia/services` | 服务列表、脱敏状态、模型、活动任务数和全局默认项 |
+| `POST /api/imagenia/services` | 新增服务 |
+| `PUT /api/imagenia/services/{id}` | 修改服务，省略 Key 时保留已有密钥 |
+| `DELETE /api/imagenia/services/{id}` | 无未完成任务时删除配置和密钥，保留资产／任务 |
+| `PUT /api/imagenia/services/default` | 设置 `{service_id, model_id}` 默认组合 |
+| `POST /api/imagenia/services/{id}/test` | 显式只读认证测试 |
+
+生成／编辑任务支持 `service_id` 和 `model_id`，前端每次显式发送。兼容旧客户端未传这两个字段时使用全局默认，禁止只传其中一个或任意覆盖模型名。模型声明的画幅、质量和编辑能力均由后端校验。
+
+新增回归：`python -m pytest plugin/tests/test_multi_services_http.py -q`、前端 `npm run test:services`。本地 fake 模式可测试完整设置、服务切换和跨服务编辑；正式宿主仍需验收 iframe 鉴权、真实兼容服务的生成／编辑和容器持久化。
+
+## 旧版 OpenAI 设置兼容接口（Issues #4、#12）
+
+旧客户端仍可通过 `/settings`、`/settings/openai`、`/settings/openai/test` 读取状态、保存旧默认服务和显式测试连接。新工作台使用前述多服务接口；旧设置接口不代表当前生成表单选择的服务。
+
+兼容配置位于数据目录 `config/openai.json`，目录权限 `0700`、文件权限 `0600`。`IMAGENIA_OPENAI_API_KEY`、`IMAGENIA_OPENAI_BASE_URL`、`IMAGENIA_OPENAI_MODEL` 分别覆盖对应文件字段；未指定地址和模型时仍使用旧默认值。设置接口不回显密钥，省略密钥时保留原值。通过兼容接口保存时同步更新迁移出的默认服务；该服务或环境配置有未完成任务时，返回 `409 service_in_use`。
+
+旧连接测试仍只发出一次只读 `GET /models` 请求（5 秒超时），不请求图像生成。正式宿主显式提交生成／编辑任务可能产生费用；常规测试使用 fake provider。
+
+宿主验收需检查 iframe 的读写鉴权与登录失效提示；本地 ASGI 测试不模拟宿主鉴权。
 
 ## 图片资料库（Issue #6）
 
@@ -107,7 +136,7 @@ QwenPaw 管理员可在 iframe 工作台的“配置”中保存或覆盖一份�
 
 生成提交 `POST /api/imagenia/jobs/generate` 返回 `202` 与 `job_id`；后台独立单 worker 将任务从 `pending` 处理到 `running`、`succeeded` 或 `failed`，前端每 1.5 秒通过 `GET /api/imagenia/jobs/{job_id}` 轮询。重新打开页面时通过 `GET /api/imagenia/jobs` 恢复近期任务。成功后从 `GET /api/imagenia/assets` 刷新资料库，图片字节从需要同一 Bearer token 的 `/api/imagenia/assets/{id}/content` 获取；新资产高亮、不自动弹详情。资产文件按年月与 UUID 保存在插件数据目录，元数据在 SQLite 中。上次运行遗留的 `running` 标记为 `interrupted`，`pending` 恢复执行。队列最多允许 50 个待处理任务（第 51 个返回 429）。运行中任务的 10 分钟截止时间到达后标记为 `failed/timeout`；不会强杀可能已经发出计费请求的 provider 调用，单 worker 在该调用返回前不会处理下一任务，迟到的结果不得写入资产。provider 429、超时、不可用及非预期响应分别映射为 `rate_limited`、`timeout`、`service_unavailable`、`invalid_response`，错误详情不包含上游异常文本、密钥或内部路径。
 
-正式宿主使用配置的默认模型（当前默认 `gpt-image-2.5`），画幅分别映射 1024×1024、1536×1024、1024×1536；质量 `standard` 映射 OpenAI 的 `medium`，`high` 对应 `high`。生成调用可能收费，请使用可用密钥和低成本提示词谨慎验证。端到端验收需在 QwenPaw iframe 验证任务提交、轮询、重启恢复、图片展示及登录失效后的安全反馈；本机自动化不代表宿主验收完成。
+正式宿主使用任务提交时选定的服务和模型，旧配置默认模型为 `gpt-image-2.5`；画幅分别映射 1024×1024、1536×1024、1024×1536；质量 `standard` 映射 OpenAI 的 `medium`，`high` 对应 `high`。生成调用可能收费，请使用可用密钥和低成本提示词谨慎验证。端到端验收需在 QwenPaw iframe 验证任务提交、轮询、重启恢复、图片展示及登录失效后的安全反馈；本机自动化不代表宿主验收完成。
 
 接入兼容网关时请填写 API 根地址（包含 `/v1` 等必要前缀），不要填写 `/images/generations` 完整接口路径。连接测试仅能检验 `/models` 的认证，不保证网关支持图像生成；真实成功生图与计费行为需在宿主手动确认。
 
@@ -133,7 +162,7 @@ QwenPaw 管理员可在 iframe 工作台的“配置”中保存或覆盖一份�
 
 ## 数据迁移与安装生命周期（Issue #10）
 
-SQLite schema 当前版本为 **v3**。首次安装自动建立 v1，再按顺序应用 v2、v3；每个版本在独立事务中完成，失败则回滚当前版本并阻止后端 HTTP 路由注册。错误只指出失败的迁移版本，不把 SQL、数据路径、配置或提示词输出到普通日志。v3 为资产来源、任务来源和任务结果建立外键（删除引用资产时 `SET NULL`），并保留资产分页、收藏和来源查询索引。重复启动已完成版本不会重建表；升级 v1/v2 时保留任务、图片元数据及图片文件。迁移前请备份持久化数据目录，**不要**在失败后手工修改 `schema_version` 来跳过迁移，应先检查备份、磁盘空间、文件权限和旧库的一致性。
+SQLite schema 当前版本为 **v4**。首次安装自动建立 v1，再按顺序应用 v2、v3、v4；每个版本在独立事务中完成，失败则回滚当前版本并阻止后端 HTTP 路由注册。错误只指出失败的迁移版本，不把 SQL、数据路径、配置或提示词输出到普通日志。v3 为资产来源、任务来源和任务结果建立外键（删除引用资产时 `SET NULL`），并保留资产分页、收藏和来源查询索引。v4 增加任务服务绑定、连接指纹、重试参数及资产来源快照；旧图片、收藏、提示词和任务均保留，来源未记录时显示“历史配置”。**升级前的 `pending` 任务缺少可靠绑定，将明确标记失败并要求确认后重新提交**；不会猜测服务并继续调用。重复启动已完成版本不会重建表；升级时保留图片元数据及图片文件。迁移前请备份持久化数据目录，**不要**在失败后手工修改 `schema_version` 来跳过迁移，应先检查备份、磁盘空间、文件权限和旧库的一致性。
 
 数据目录优先使用 `IMAGENIA_DATA_DIR`；该变量已设置但为空或仅含空格时拒绝启动，避免误写工作目录。未设置时，新安装默认使用 **`plugin.py` 所在安装目录下的 `data/`**，不再默认写入容器用户的家目录。本地开发入口仍使用独立的 `plugin/.local-data/`。
 
@@ -141,7 +170,8 @@ SQLite schema 当前版本为 **v3**。首次安装自动建立 v1，再按顺�
 
 ```text
 /app/working/plugins/imagenia/data/
-├── config/openai.json       # 页面保存的 API Key、base URL 和默认模型
+├── config/services.json     # 多服务配置、Key、模型与默认项
+├── config/openai.json       # 迁移保留的旧设置兼容文件（如存在）
 ├── imagenia.sqlite3         # 图片元数据、收藏、提示词和任务
 └── images/YYYY/MM/UUID.png  # 生成或编辑结果
 ```

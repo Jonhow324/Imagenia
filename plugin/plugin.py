@@ -56,6 +56,8 @@ class ImageniaPlugin:
                 base_url=lambda: app.settings.effective()[2],
                 model=lambda: app.settings.effective()[3])
             app.worker.provider = app.provider
+            app.provider_factory = lambda selected: OpenAIImageProvider(
+                lambda: selected["api_key"], base_url=selected["base_url"], model=selected["model"])
             # Import FastAPI only inside QwenPaw; the local HTTP seam needs none.
             from src.imagenia_plugin.qwenpaw_router import build_router
 

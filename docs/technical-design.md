@@ -1,7 +1,7 @@
 # Imagenia 技术设计
 
 - 日期：2026-09-22
-- 状态：设计已确认，尚未进入实现
+- 状态：V1 核心与多服务扩展已实现；多服务选择和 schema v4 见 [ADR 0005](adr/0005-multiple-image-services.md)。
 
 ## 1. 模块边界
 
@@ -27,7 +27,10 @@ id                 UUID 主键
 kind               generated | edited
 source_asset_id    可空，直接来源资产
 prompt             可空，删除资产时清除
-model              使用的默认模型
+model              任务实际选择并固定的模型
+service_id         可空，服务身份；旧资产不推测归属
+service_name       可空，提交时的服务名称快照
+model_id           可空，服务内模型 ID
 size               square | landscape | portrait
 quality            standard | high
 width              整数
@@ -53,6 +56,11 @@ source_asset_id    可空
 result_asset_id    可空
 prompt             执行期间保存，资产删除后清除
 request_json       执行期间保存，完成后按隐私策略清理
+retry_options      画幅／质量，手动重试用；删除关联资产时清除
+service_id         可空，任务绑定服务 ID
+service_name       可空，服务名称快照
+model_id / model   可空，模型 ID 与模型名快照
+connection_fingerprint 私有签名密钥计算的连接 HMAC，不含原始密钥
 error_code         可空稳定错误码
 error_message      可空用户安全文案
 error_detail       可空，仅写日志或受限诊断

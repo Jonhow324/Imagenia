@@ -49,7 +49,7 @@ def delete_asset(db: sqlite3.Connection, data_dir: Path, asset_id: str) -> bool:
                 db.execute("""UPDATE generation_jobs SET
                     status=CASE WHEN status IN ('pending','running') THEN 'failed' ELSE status END,
                     error_code=CASE WHEN status IN ('pending','running') THEN 'source_unavailable' ELSE error_code END,
-                    error_message=NULL, prompt='', request_json=NULL,
+                    error_message=NULL, prompt='', request_json=NULL, retry_options=NULL,
                     source_asset_id=NULL, result_asset_id=NULL
                     WHERE source_asset_id=? OR result_asset_id=?""", (asset_id, asset_id))
                 db.execute("DELETE FROM image_assets WHERE id=?", (asset_id,))

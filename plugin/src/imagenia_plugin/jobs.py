@@ -47,6 +47,7 @@ class GenerationWorker:
     def __init__(self, data_dir: Path, provider: ImageProvider) -> None:
         self.data_dir = data_dir
         self.provider = provider
+        self.resolve_provider = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -57,6 +58,18 @@ class GenerationWorker:
                 db.execute("""UPDATE generation_jobs SET status='failed', error_code='interrupted',
                     error_message='任务已中断，请重新提交。', finished_at=?, request_json=NULL
                     WHERE status='running'""", (now(),))
+            # Never hold SQLite's write lock while taking the catalog lock:
+            # submissions take the catalog lock before their short DB transaction.
+            if self.resolve_provider:
+                pending = db.execute("SELECT * FROM generation_jobs WHERE status='pending'").fetchall()
+                for job in pending:
+                    try:
+                        self.resolve_provider(job)
+                    except ProviderError:
+                        with db:
+                            db.execute("""UPDATE generation_jobs SET status='failed', error_code='configuration_changed',
+                                error_message='服务配置已变化，请确认后重新提交。', finished_at=?, request_json=NULL
+                                WHERE id=? AND status='pending'""", (now(), job["id"]))
         finally:
             db.close()
 
@@ -108,7 +121,7 @@ class GenerationWorker:
         try:
             with db:
                 db.execute("BEGIN IMMEDIATE")
-                job = db.execute("""SELECT id, kind, source_asset_id, prompt, request_json FROM generation_jobs
+                job = db.execute("""SELECT * FROM generation_jobs
                     WHERE status='pending' ORDER BY created_at, id LIMIT 1""").fetchone()
                 if job is None:
                     return False
@@ -119,13 +132,17 @@ class GenerationWorker:
             timer.start()
             try:
                 options = json.loads(job["request_json"])
-                active_model = getattr(self.provider, "model", DEFAULT_MODEL)
-                active_model = active_model() if callable(active_model) else active_model
+                if self.resolve_provider:
+                    provider, active_model = self.resolve_provider(job)
+                else:
+                    provider = self.provider
+                    active_model = getattr(provider, "model", DEFAULT_MODEL)
+                    active_model = active_model() if callable(active_model) else active_model
                 if job["kind"] == "edit":
                     source = source_image(db, self.data_dir, job["source_asset_id"])
-                    content = self.provider.edit(job["prompt"], source, size=options["size"], quality=options["quality"])
+                    content = provider.edit(job["prompt"], source, size=options["size"], quality=options["quality"])
                 else:
-                    content = self.provider.generate(job["prompt"], size=options["size"], quality=options["quality"])
+                    content = provider.generate(job["prompt"], size=options["size"], quality=options["quality"])
                 if self._stop.is_set():
                     raise ProviderError("interrupted")
                 if time.monotonic() >= deadline:
@@ -162,11 +179,11 @@ class GenerationWorker:
                             raise ProviderError("source_unavailable")
                         db.execute("""INSERT INTO image_assets
                             (id,kind,source_asset_id,prompt,model,size,quality,width,height,file_path,
-                            mime_type,file_size,created_at,updated_at)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,'image/png',?,?,?)""",
+                            mime_type,file_size,created_at,updated_at,service_id,service_name,model_id)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,'image/png',?,?,?,?,?,?)""",
                             (asset_id, "edited" if job["kind"] == "edit" else "generated", job["source_asset_id"],
                              job["prompt"], active_model, options["size"], options["quality"], width, height,
-                             relative, len(content), timestamp, timestamp))
+                             relative, len(content), timestamp, timestamp, job["service_id"], job["service_name"], job["model_id"]))
                         if self._stop.is_set():
                             raise ProviderError("interrupted")
                         if time.monotonic() >= deadline:
@@ -179,8 +196,8 @@ class GenerationWorker:
             except Exception as exc:
                 code = "timeout" if isinstance(exc, TimeoutError) else (exc.code if isinstance(exc, ProviderError) and exc.code in {
                     "not_configured", "invalid_api_key", "invalid_image", "source_unavailable",
-                    "timeout", "rate_limited", "invalid_response", "interrupted"} else "service_unavailable")
-                messages = {"not_configured": "请先配置 API Key。", "invalid_api_key": "API Key 无效，请检查配置。",
+                    "timeout", "rate_limited", "invalid_response", "interrupted", "configuration_changed"} else "service_unavailable")
+                messages = {"configuration_changed": "服务配置已变化，请确认后重新提交。", "not_configured": "请先配置 API Key。", "invalid_api_key": "API Key 无效，请检查配置。",
                             "invalid_image": "服务返回的图片无效，请重新提交。", "source_unavailable": "来源图片已不可用，请重新选择。",
                             "timeout": "图像服务超时，请重新提交。", "interrupted": "任务已中断，请重新提交。", "rate_limited": "图像服务请求过于频繁，请稍后重试。",
                             "invalid_response": "图像服务响应无效，请稍后重试。",

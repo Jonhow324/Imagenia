@@ -4,6 +4,7 @@ import { CircleCheckIcon, CircleXIcon, Clock3Icon, LoaderCircleIcon } from "luci
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import type { GenerationJob, JobStatus } from "@/mocks/imagenia-service"
 
@@ -14,7 +15,7 @@ const statusMeta: Record<JobStatus, { label: string; icon: typeof Clock3Icon; cl
   failed: { label: "失败", icon: CircleXIcon, className: "border-destructive/30 bg-destructive/10 text-destructive" },
 }
 
-export function GenerationJobCard({ job }: { job: GenerationJob }) {
+export function GenerationJobCard({ job, onRetry }: { job: GenerationJob; onRetry: (job: GenerationJob) => void }) {
   const meta = statusMeta[job.status]
   const Icon = meta.icon
 
@@ -23,7 +24,11 @@ export function GenerationJobCard({ job }: { job: GenerationJob }) {
       <Alert variant="destructive">
         <CircleXIcon aria-hidden="true" />
         <AlertTitle className="line-clamp-1">{job.prompt}</AlertTitle>
-        <AlertDescription>{job.errorMessage}</AlertDescription>
+        <AlertDescription>
+          <p>{job.serviceName ?? "历史配置"} · {job.model ?? "未知模型"}</p>
+          <p>{job.errorMessage}</p>
+          {job.options && job.prompt ? <Button type="button" variant="outline" size="sm" onClick={() => onRetry(job)}>使用此参数再试</Button> : null}
+        </AlertDescription>
       </Alert>
     )
   }
@@ -39,7 +44,7 @@ export function GenerationJobCard({ job }: { job: GenerationJob }) {
             <p className="truncate text-sm font-medium">{job.prompt}</p>
             <Badge variant="outline" className={meta.className}>{meta.label}</Badge>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">{job.kind === "edit" ? "图片编辑" : "图像生成"} · {formatTime(job.createdAt)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{job.serviceName ?? "历史配置"} · {job.model ?? "未知模型"} · {job.kind === "edit" ? "图片编辑" : "图像生成"} · {formatTime(job.createdAt)}</p>
         </div>
       </CardContent>
     </Card>

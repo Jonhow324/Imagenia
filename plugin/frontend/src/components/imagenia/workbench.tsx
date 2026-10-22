@@ -4,9 +4,10 @@ import {
   ImagesIcon,
   Settings2Icon,
   SlidersHorizontalIcon,
-  SparklesIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+
+import imageniaIconUrl from "../../../../icon.svg?url"
 
 import { ApiKeyMissingAlert } from "@/components/imagenia/api-key-missing-alert"
 import { AssetDetailSheet } from "@/components/imagenia/asset-detail-sheet"
@@ -18,7 +19,7 @@ import { PortalContainerProvider } from "@/components/imagenia/portal-root"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { getSettings, type SettingsStatus } from "@/services/settings"
+import { getServices, type CatalogStatus } from "@/services/settings"
 import { deleteAsset as removeAsset, enqueueGeneration, favoriteAsset, getAsset, getJob, listAssetPage, listJobs } from "@/services/generation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Toaster } from "@/components/ui/sonner"
@@ -45,10 +46,11 @@ export function ImageniaWorkbench() {
   const [favoriteOnly, setFavoriteOnly] = React.useState(false)
   const mutations = React.useRef(new Set<string>())
   const [kindFilter, setKindFilter] = React.useState<KindFilter>("all")
-  const [settingsStatus, setSettingsStatus] = React.useState<SettingsStatus | null>(null)
+  const [settingsStatus, setSettingsStatus] = React.useState<CatalogStatus | null>(null)
   const [settingsError, setSettingsError] = React.useState("")
   const [settingsLoading, setSettingsLoading] = React.useState(true)
-  const configured = settingsStatus?.openai.configured ?? false
+  const configured = settingsStatus?.services.some(service => service.enabled && service.configured) ?? false
+  const [retryInput, setRetryInput] = React.useState<GenerateInput | null>(null)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [isLoading, setIsLoading] = React.useState(true)
@@ -67,7 +69,7 @@ export function ImageniaWorkbench() {
 
   React.useEffect(() => {
     let active = true
-    getSettings().then((result) => {
+    getServices().then((result) => {
       if (active) setSettingsStatus(result)
     }).catch((cause: unknown) => {
       if (active) setSettingsError(cause instanceof Error ? cause.message : "无法读取配置。")
@@ -312,12 +314,35 @@ export function ImageniaWorkbench() {
     }
   }
 
+  async function retryGeneration(job: GenerationJob) {
+    if (!job.options || !job.prompt) return
+    if (job.kind === "edit") {
+      if (!job.sourceAssetId) { toast.error("来源图片已不可用，请重新选择。"); return }
+      try {
+        const source = await getAsset(job.sourceAssetId)
+        cancelEdit()
+        editingUrl.current = source.imageUrl
+        setEditingAsset(source)
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : "来源图片已不可用。")
+        return
+      }
+    } else cancelEdit()
+    setRetryInput({ prompt: job.prompt, size: job.options.size, quality: job.options.quality,
+      serviceId: job.serviceId, modelId: job.modelId, sourceAssetId: job.sourceAssetId })
+    window.scrollTo({ top: 0, behavior: "smooth" })
+    toast.info("已恢复参数，请确认服务和模型后提交。")
+  }
+
   async function submitGeneration(input: GenerateInput) {
     setIsSubmitting(true)
     try {
       const id = await enqueueGeneration(input)
       setJobs((current) => [{ id, kind: (input.sourceAssetId ? "edit" : "generate") as GenerationJob["kind"], prompt: input.prompt, status: "pending" as const,
-        createdAt: new Date().toISOString() }, ...current])
+        createdAt: new Date().toISOString(), serviceId: input.serviceId, modelId: input.modelId,
+        serviceName: settingsStatus?.services.find(service => service.id === input.serviceId)?.name,
+        model: settingsStatus?.services.find(service => service.id === input.serviceId)?.models.find(model => model.id === input.modelId)?.name,
+        options: { size: input.size, quality: input.quality }, sourceAssetId: input.sourceAssetId }, ...current])
       toast.info("任务已加入队列")
       if (input.sourceAssetId) cancelEdit()
     } catch (cause) {
@@ -337,9 +362,14 @@ export function ImageniaWorkbench() {
           <div className="mx-auto w-full max-w-[1540px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
             <header className="mb-6 flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-3">
-                <div className="grid size-11 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-                  <SparklesIcon className="size-5" aria-hidden="true" />
-                </div>
+                <img
+                  src={imageniaIconUrl}
+                  alt=""
+                  aria-hidden="true"
+                  width={44}
+                  height={44}
+                  className="size-11 shrink-0"
+                />
                 <div>
                   <div className="flex items-center gap-2">
                     <h1 className="text-xl font-semibold tracking-tight">Imagenia</h1>
@@ -381,6 +411,8 @@ export function ImageniaWorkbench() {
               <aside className="grid gap-4 lg:sticky lg:top-5">
                 <GenerationForm
                   configured={configured}
+                  catalog={settingsStatus}
+                  retryInput={retryInput}
                   editingAsset={editingAsset}
                   isSubmitting={isSubmitting}
                   onCancelEdit={cancelEdit}
@@ -398,7 +430,7 @@ export function ImageniaWorkbench() {
                     </div>
                   </CardHeader>
                   <CardContent className="grid gap-2.5">
-                    {jobs.slice(0, 3).map((job) => <GenerationJobCard key={job.id} job={job} />)}
+                    {jobs.slice(0, 3).map((job) => <GenerationJobCard key={job.id} job={job} onRetry={retryGeneration} />)}
                   </CardContent>
                 </Card>
               </aside>

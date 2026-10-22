@@ -40,6 +40,18 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
       // No server-provided details are displayed or logged.
     }
     const messages: Record<string, string> = {
+      service_in_use: "此服务有未完成任务，暂不能修改连接信息、移除模型或删除服务。",
+      read_only_service: "环境配置由容器环境变量管理，不能在页面修改。",
+      service_not_found: "所选服务已不存在，请重新选择。",
+      model_not_found: "所选模型已不存在，请重新选择。",
+      service_disabled: "所选服务已停用，请重新选择。",
+      edit_not_supported: "此模型未启用图片编辑，请选择其他模型。",
+      unsupported_options: "此模型不支持所选画幅或质量。",
+      invalid_service: "请检查服务名称、地址、密钥和模型列表。",
+      invalid_model: "请检查模型名称是否重复，并至少选择一种画幅和质量。",
+      invalid_selection: "请选择有效的服务和模型。",
+      configuration_changed: "服务配置已变化，请确认后重新提交。",
+      service_limit: "最多可保存 50 个服务。",
       invalid_api_key: "请输入有效的 API Key。",
       not_configured: "请先配置 API Key。",
       configuration_unavailable: "私有配置暂时不可用，请检查插件数据目录。",
@@ -88,4 +100,65 @@ export function saveSettings(settings: { api_key?: string; base_url?: string; mo
 /** Only called by the explicit test button; never during load or save. */
 export function testConnection(): Promise<{ status: "ok" }> {
   return request<{ status: "ok" }>("/settings/openai/test", { method: "POST" })
+}
+
+export interface ServiceModel {
+  id?: string
+  name: string
+  sizes: ("square" | "landscape" | "portrait")[]
+  qualities: ("standard" | "high")[]
+  supports_edit: boolean
+}
+
+export interface ImageService {
+  id: string
+  name: string
+  base_url: string
+  enabled: boolean
+  configured: boolean
+  read_only: boolean
+  active_jobs: number
+  models: (ServiceModel & { id: string })[]
+}
+
+export interface ServiceSelection {
+  service_id: string
+  model_id: string
+}
+
+export interface CatalogStatus {
+  services: ImageService[]
+  default: ServiceSelection | null
+}
+
+export interface ServiceInput {
+  name: string
+  base_url: string
+  api_key?: string
+  enabled: boolean
+  models: ServiceModel[]
+}
+
+export function getServices(): Promise<CatalogStatus> {
+  return request<CatalogStatus>("/services")
+}
+
+export function saveService(settings: ServiceInput, id?: string): Promise<CatalogStatus> {
+  return request<CatalogStatus>(id ? `/services/${encodeURIComponent(id)}` : "/services", {
+    method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings),
+  })
+}
+
+export function deleteService(id: string): Promise<CatalogStatus> {
+  return request<CatalogStatus>(`/services/${encodeURIComponent(id)}`, { method: "DELETE" })
+}
+
+export function setDefaultService(selection: ServiceSelection): Promise<CatalogStatus> {
+  return request<CatalogStatus>("/services/default", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(selection),
+  })
+}
+
+export function testServiceConnection(id: string): Promise<{ status: "ok" }> {
+  return request<{ status: "ok" }>(`/services/${encodeURIComponent(id)}/test`, { method: "POST" })
 }

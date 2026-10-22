@@ -36,7 +36,7 @@ async def test_upgrade_and_repeated_start_preserve_config_jobs_assets_and_files(
             assert (await http.get(f"/api/imagenia/jobs/{queued}")).json()["result_asset_id"] == asset_id
             assert (await http.get(f"/api/imagenia/assets/{asset_id}")).json()["is_favorite"]
             assert (await http.get(f"/api/imagenia/assets/{asset_id}/content")).content == original
-        assert reopened.database.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+        assert reopened.database.execute("SELECT version FROM schema_version").fetchone()[0] == 4
         assert reopened.database.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert reopened.database.execute("PRAGMA foreign_key_check").fetchall() == []
         reopened.database.close()
@@ -189,7 +189,7 @@ def test_upgrade_from_legacy_v2_keeps_jobs_assets_and_references(tmp_path, monke
     image.parent.mkdir(parents=True)
     image.write_bytes(FakeImageProvider().image_bytes)
     app = create_app(data, FakeImageProvider())
-    assert app.database.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+    assert app.database.execute("SELECT version FROM schema_version").fetchone()[0] == 4
     assert app.database.execute("SELECT result_asset_id FROM generation_jobs WHERE id='old-job'").fetchone()[0] == 'old-asset'
     assert app.database.execute("SELECT is_favorite FROM image_assets WHERE id='old-asset'").fetchone()[0] == 1
     assert app.database.execute("PRAGMA foreign_key_check").fetchall() == []

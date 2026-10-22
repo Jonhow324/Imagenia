@@ -64,6 +64,7 @@ export function AssetDetailSheet({
           <Separator />
 
           <dl className="grid grid-cols-2 gap-4 text-sm">
+            <Meta icon={ShapesIcon} label="图像服务" value={asset.serviceName ?? "历史配置"} />
             <Meta icon={ShapesIcon} label="模型" value={asset.model} />
             <Meta icon={ImageIcon} label="画幅" value={`${sizeLabel(asset.size)} · ${asset.dimensions}`} />
             <Meta icon={CalendarIcon} label="创建时间" value={formatDateTime(asset.createdAt)} />

@@ -35,6 +35,26 @@ def build_router(app: ImageniaApp) -> APIRouter:
         status, payload = await app.test_connection()
         return JSONResponse(payload, status_code=status)
 
+    @router.api_route("/services", methods=["GET", "POST"])
+    async def services(request: Request) -> JSONResponse:
+        status, payload = app.handle(request.method, "/api/imagenia/services", await request.body())
+        return JSONResponse(payload, status_code=status)
+
+    @router.api_route("/services/default", methods=["PUT"])
+    async def service_default(request: Request) -> JSONResponse:
+        status, payload = app.handle("PUT", "/api/imagenia/services/default", await request.body())
+        return JSONResponse(payload, status_code=status)
+
+    @router.api_route("/services/{service_id}", methods=["PUT", "DELETE"])
+    async def service(service_id: str, request: Request) -> JSONResponse:
+        status, payload = app.handle(request.method, f"/api/imagenia/services/{service_id}", await request.body())
+        return JSONResponse(payload, status_code=status)
+
+    @router.api_route("/services/{service_id}/test", methods=["POST"])
+    async def service_connection(service_id: str) -> JSONResponse:
+        status, payload = await app.test_service_connection(service_id)
+        return JSONResponse(payload, status_code=status)
+
     @router.api_route("/assets", methods=["GET"])
     async def assets(request: Request) -> JSONResponse:
         status, payload = app.handle("GET", "/api/imagenia/assets", query=request.scope.get("query_string", b""))

@@ -143,7 +143,7 @@ async def test_upgrade_preserves_version_one_jobs(tmp_path, monkeypatch):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
         result = await http.get("/api/imagenia/jobs/old")
     assert result.json()["status"] == "failed"
-    assert app.database.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+    assert app.database.execute("SELECT version FROM schema_version").fetchone()[0] == 4
 
 @pytest.mark.anyio
 async def test_started_worker_completes_queued_job_without_manual_process(generation):
@@ -166,7 +166,7 @@ async def test_started_worker_completes_queued_job_without_manual_process(genera
 @pytest.mark.anyio
 async def test_asset_records_effective_backend_model_not_user_supplied(generation):
     app, provider = generation
-    provider.model = lambda: "configured-image-v2"
+    app.settings.save(model="configured-image-v2")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
         invalid = await http.post("/api/imagenia/jobs/generate", json={"prompt": "view", "model": "override"})
         queued = await http.post("/api/imagenia/jobs/generate", json={"prompt": "view"})
@@ -177,7 +177,7 @@ async def test_asset_records_effective_backend_model_not_user_supplied(generatio
     assert asset.json()["model"] == "configured-image-v2"
 
 @pytest.mark.anyio
-async def test_worker_uses_saved_model_and_endpoint_at_execution_without_network(generation, monkeypatch):
+async def test_worker_keeps_submitted_model_and_endpoint_and_blocks_changes(generation, monkeypatch):
     import urllib.request
     import json
     from src.imagenia_plugin.provider import OpenAIImageProvider
@@ -190,13 +190,15 @@ async def test_worker_uses_saved_model_and_endpoint_at_execution_without_network
         return io.BytesIO(json.dumps({"data": [{
             "b64_json": base64.b64encode(fake.image_bytes).decode()}]}).encode())
     monkeypatch.setattr(urllib.request, "urlopen", fake_open)
-    app.worker.provider = OpenAIImageProvider(lambda: app.settings.effective()[0],
-        base_url=lambda: app.settings.effective()[2], model=lambda: app.settings.effective()[3])
+    app.provider_factory = lambda selected: OpenAIImageProvider(
+        lambda: selected["api_key"], base_url=selected["base_url"], model=selected["model"])
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
-        queued = await http.post("/api/imagenia/jobs/generate", json={"prompt": "view"})
         saved = await http.put("/api/imagenia/settings/openai", json={
             "base_url": "https://gateway.example/v1", "model": "image-custom"})
         assert saved.status_code == 200
+        queued = await http.post("/api/imagenia/jobs/generate", json={"prompt": "view"})
+        changed = await http.put("/api/imagenia/settings/openai", json={"model": "different-model"})
+        assert changed.status_code == 409
         assert app.worker.process_next()
         job = await http.get(f"/api/imagenia/jobs/{queued.json()['job_id']}")
         asset = await http.get(f"/api/imagenia/assets/{job.json()['result_asset_id']}")

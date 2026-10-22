@@ -22,6 +22,7 @@ from .asset_listing import list_asset_rows
 from .asset_mutations import UnsafeAssetPath, delete_asset, set_favorite
 from .jobs import GenerationWorker, source_image
 from .settings import ConfigurationUnavailable, ConnectionFailed, OpenAISettings, valid_base_url, valid_model
+from .services import ServiceCatalog, ServiceError
 from .storage import open_database
 
 
@@ -44,7 +45,10 @@ class ImageniaApp:
             raise
         self.provider = provider or FakeImageProvider()
         self.settings = OpenAISettings(self.data_dir, connection_probe) if connection_probe else OpenAISettings(self.data_dir)
+        self.services = ServiceCatalog(self.data_dir, self.settings)
+        self.provider_factory = None
         self.worker = GenerationWorker(self.data_dir, self.provider)
+        self.worker.resolve_provider = self._resolve_provider
 
     def _trace_thread(self, stage: str) -> None:
         """Opt-in host lifecycle evidence; never include prompts or credentials."""
@@ -67,7 +71,12 @@ class ImageniaApp:
                         "headers": [(b"content-type", b"image/png" if status == 200 else b"application/json")]})
             await send({"type": "http.response.body", "body": content if status == 200 else b'{"error":{"code":"not_found"}}'})
             return
-        status, payload = await self.test_connection() if method == "POST" and path == "/api/imagenia/settings/openai/test" else self.handle(method, path, body, scope.get("query_string", b""))
+        if method == "POST" and path == "/api/imagenia/settings/openai/test":
+            status, payload = await self.test_connection()
+        elif method == "POST" and path.startswith("/api/imagenia/services/") and path.endswith("/test"):
+            status, payload = await self.test_service_connection(path.split("/")[-2])
+        else:
+            status, payload = self.handle(method, path, body, scope.get("query_string", b""))
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         await send({
             "type": "http.response.start",
@@ -93,6 +102,8 @@ class ImageniaApp:
                 "provider": "fake" if isinstance(self.provider, FakeImageProvider) else "custom",
                 "database": "ok",
             }
+        if path == "/api/imagenia/services" or path.startswith("/api/imagenia/services/"):
+            return self._service_request(method, path, body)
         if method == "GET" and path == "/api/imagenia/settings":
             try:
                 return 200, self.settings.status()
@@ -145,14 +156,19 @@ class ImageniaApp:
         return {"id": row["id"], "kind": row["kind"], "prompt": row["prompt"],
                 "model": row["model"], "size": row["size"], "quality": row["quality"],
                 "width": row["width"], "height": row["height"], "created_at": row["created_at"],
-                "is_favorite": bool(row["is_favorite"]), "source_asset_id": row["source_asset_id"]}
+                "is_favorite": bool(row["is_favorite"]), "source_asset_id": row["source_asset_id"],
+                "service_id": row["service_id"], "service_name": row["service_name"] or "历史配置",
+                "model_id": row["model_id"]}
 
     @staticmethod
     def _job(row: Any) -> dict[str, Any]:
         return {"id": row["id"], "kind": row["kind"], "status": row["status"],
                 "prompt": row["prompt"], "created_at": row["created_at"],
                 "result_asset_id": row["result_asset_id"], "error_code": row["error_code"],
-                "error_message": row["error_message"]}
+                "error_message": row["error_message"], "source_asset_id": row["source_asset_id"],
+                "service_id": row["service_id"], "service_name": row["service_name"] or "历史配置",
+                "model_id": row["model_id"], "model": row["model"],
+                "options": json.loads(row["retry_options"]) if row["retry_options"] else None}
 
     def asset_content(self, asset_id: str) -> tuple[int, bytes]:
         self._trace_thread("content")
@@ -180,11 +196,13 @@ class ImageniaApp:
         if ("base_url" in request and not valid_base_url(request["base_url"])) or ("model" in request and not valid_model(request["model"])):
             return 422, {"error": {"code": "invalid_options", "message": "Unsupported base URL or model"}}
         try:
-            self.settings.save(key.strip() if key is not None else None,
-                               request.get("base_url"), request.get("model"))
+            self.services.save_legacy(key.strip() if key is not None else None,
+                                      request.get("base_url"), request.get("model"), self.database)
             return 200, self.settings.status()
         except ConfigurationUnavailable:
             return self._settings_unavailable()
+        except ServiceError as exc:
+            return self._service_error(exc)
 
     async def test_connection(self) -> tuple[int, dict[str, Any]]:
         try:
@@ -213,9 +231,13 @@ class ImageniaApp:
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 4000:
             return 422, {"error": {"code": "invalid_prompt", "message": "A prompt is required"}}
         size, quality = request.get("size", "square"), request.get("quality", "standard")
-        allowed = {"prompt", "size", "quality", "source_asset_id"} if editing else {"prompt", "size", "quality"}
+        allowed = {"prompt", "size", "quality", "service_id", "model_id"} | ({"source_asset_id"} if editing else set())
         if size not in ("square", "landscape", "portrait") or quality not in ("standard", "high") or set(request) - allowed:
             return 422, {"error": {"code": "invalid_options", "message": "Unsupported size, quality or model"}}
+        if {"service_id", "model_id"} & request.keys():
+            if not all(isinstance(request.get(field), str) and 0 < len(request[field]) <= 128
+                       for field in ("service_id", "model_id")):
+                return self._service_error(ServiceError("invalid_selection"))
         source_id = request.get("source_asset_id") if editing else None
         if editing:
             if not isinstance(source_id, str) or not source_id.strip() or len(source_id) > 128:
@@ -223,20 +245,81 @@ class ImageniaApp:
             if self.asset_content(source_id)[0] != 200:
                 return self._missing()
         try:
-            if not self.settings.status()["openai"]["configured"]:
-                return 409, {"error": {"code": "not_configured", "message": "Configure an API key first"}}
+            with self.services.lock:
+                selected = self.services.select(request.get("service_id"), request.get("model_id"),
+                    editing=editing, size=size, quality=quality)
+                if self.database.execute("SELECT COUNT(*) FROM generation_jobs WHERE status='pending'").fetchone()[0] >= 50:
+                    return 429, {"error": {"code": "queue_full", "message": "Queue is full"}}
+                job_id = str(uuid.uuid4())
+                options = json.dumps({"size": size, "quality": quality})
+                with self.database:
+                    self.database.execute("""INSERT INTO generation_jobs
+                        (id,kind,status,prompt,source_asset_id,request_json,retry_options,created_at,
+                         service_id,service_name,model_id,model,connection_fingerprint)
+                        VALUES (?,?,'pending',?,?,?,?,?,?,?,?,?,?)""",
+                        (job_id, "edit" if editing else "generate", prompt.strip(), source_id, options, options,
+                         datetime.now(UTC).isoformat(), selected["service_id"], selected["service_name"],
+                         selected["model_id"], selected["model"], selected["connection_fingerprint"]))
+                return 202, {"job_id": job_id, "status": "pending"}
         except ConfigurationUnavailable:
             return self._settings_unavailable()
-        if self.database.execute("SELECT COUNT(*) FROM generation_jobs WHERE status='pending'").fetchone()[0] >= 50:
-            return 429, {"error": {"code": "queue_full", "message": "Queue is full"}}
-        job_id = str(uuid.uuid4())
-        self.database.execute("""INSERT INTO generation_jobs
-            (id, kind, status, prompt, source_asset_id, request_json, created_at)
-            VALUES (?, ?, 'pending', ?, ?, ?, ?)""",
-            (job_id, "edit" if editing else "generate", prompt.strip(), source_id,
-             json.dumps({"size": size, "quality": quality}), datetime.now(UTC).isoformat()))
-        self.database.commit()
-        return 202, {"job_id": job_id, "status": "pending"}
+        except ServiceError as exc:
+            return self._service_error(exc)
+
+    def _resolve_provider(self, job):
+        try:
+            with self.services.lock:
+                selected = self.services.select(job["service_id"], job["model_id"], submitted=True)
+                if selected["connection_fingerprint"] != job["connection_fingerprint"]:
+                    raise ProviderError("configuration_changed")
+                provider = (self.provider_factory(selected) if self.provider_factory and self.worker.provider is self.provider
+                            else self.worker.provider)
+                return provider, selected["model"]
+        except (ConfigurationUnavailable, ServiceError):
+            raise ProviderError("configuration_changed") from None
+
+    @staticmethod
+    def _service_error(exc: ServiceError):
+        return exc.status, {"error": {"code": exc.code, "message": "图像服务配置不可用，请检查服务和模型选择。"}}
+
+    def _service_request(self, method: str, path: str, body: bytes):
+        try:
+            if path == "/api/imagenia/services":
+                if method == "GET":
+                    return 200, self.services.status(self.database)
+                if method == "POST":
+                    return 201, self.services.save(json.loads(body), self.database)
+            if path == "/api/imagenia/services/default" and method == "PUT":
+                return 200, self.services.set_default(json.loads(body), self.database)
+            if path.count("/") == 4:
+                service_id = path.rsplit("/", 1)[-1]
+                if method == "PUT":
+                    return 200, self.services.save(json.loads(body), self.database, service_id)
+                if method == "DELETE":
+                    return 200, self.services.delete(service_id, self.database)
+            return self._missing()
+        except (ValueError, UnicodeDecodeError):
+            return 400, {"error": {"code": "invalid_json", "message": "Request body must be JSON"}}
+        except ConfigurationUnavailable:
+            return self._settings_unavailable()
+        except ServiceError as exc:
+            return self._service_error(exc)
+
+    async def test_service_connection(self, service_id: str):
+        try:
+            key, url = self.services.connection(service_id)
+            self.settings.probe(key, url)
+            return 200, {"status": "ok"}
+        except ConfigurationUnavailable:
+            return self._settings_unavailable()
+        except ServiceError as exc:
+            return self._service_error(exc)
+        except ConnectionFailed as exc:
+            code = exc.code if exc.code in {"invalid_api_key", "service_unavailable"} else "service_unavailable"
+            return 502, {"error": {"code": code, "message": "连接测试失败。"}}
+        except Exception:
+            return 502, {"error": {"code": "service_unavailable", "message": "连接测试失败。"}}
+
 
 
 def create_app(data_dir: str | Path, provider: ImageProvider | None = None, connection_probe: Callable[[str], None] | None = None) -> ImageniaApp:

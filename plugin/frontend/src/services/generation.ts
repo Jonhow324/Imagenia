@@ -2,6 +2,12 @@ import { authenticatedFetch, request, SettingsRequestError } from "./settings.ts
 import type { GenerateInput, GenerationJob, ImageAsset } from "../mocks/imagenia-service"
 
 interface JobResource {
+  service_id?: string
+  service_name?: string
+  model_id?: string
+  model?: string
+  source_asset_id?: string
+  options?: { size: GenerateInput["size"]; quality: GenerateInput["quality"] }
   id: string
   kind: "generate" | "edit"
   prompt: string
@@ -12,6 +18,9 @@ interface JobResource {
 }
 
 interface AssetResource {
+  service_id?: string
+  service_name?: string
+  model_id?: string
   id: string
   kind: ImageAsset["kind"]
   prompt: string
@@ -29,6 +38,7 @@ export async function enqueueGeneration(input: GenerateInput): Promise<string> {
   const response = await request<{ job_id: string; status: "pending" }>(editing ? "/jobs/edit" : "/jobs/generate", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt: input.prompt, size: input.size, quality: input.quality,
+      ...(input.serviceId ? { service_id: input.serviceId, model_id: input.modelId } : {}),
       ...(editing ? { source_asset_id: input.sourceAssetId } : {}) }),
   })
   return response.job_id
@@ -38,7 +48,8 @@ export async function getJob(id: string): Promise<GenerationJob> {
   const job = await request<JobResource>(`/jobs/${encodeURIComponent(id)}`)
   return { id: job.id, kind: job.kind, prompt: job.prompt, status: job.status,
     createdAt: job.created_at, errorMessage: job.error_message ?? undefined,
-    resultAssetId: job.result_asset_id ?? undefined }
+    resultAssetId: job.result_asset_id ?? undefined, serviceId: job.service_id, serviceName: job.service_name,
+    modelId: job.model_id, model: job.model, sourceAssetId: job.source_asset_id ?? undefined, options: job.options ?? undefined }
 }
 
 export async function listJobs(): Promise<GenerationJob[]> {
@@ -46,7 +57,8 @@ export async function listJobs(): Promise<GenerationJob[]> {
   return data.items.map((job) => ({ id: job.id, kind: job.kind, prompt: job.prompt,
     status: job.status, createdAt: job.created_at,
     errorMessage: job.error_message ?? undefined,
-    resultAssetId: job.result_asset_id ?? undefined }))
+    resultAssetId: job.result_asset_id ?? undefined, serviceId: job.service_id, serviceName: job.service_name,
+    modelId: job.model_id, model: job.model, sourceAssetId: job.source_asset_id ?? undefined, options: job.options ?? undefined }))
 }
 
 export interface AssetPage {
@@ -63,6 +75,7 @@ export interface AssetFilters {
 
 function mapAsset(asset: AssetResource, url: string): ImageAsset {
   return { id: asset.id, kind: asset.kind, prompt: asset.prompt, model: asset.model,
+    serviceId: asset.service_id, serviceName: asset.service_name, modelId: asset.model_id,
     size: asset.size, dimensions: `${asset.width} × ${asset.height}`,
     createdAt: asset.created_at, isFavorite: asset.is_favorite,
     sourceAssetId: asset.source_asset_id ?? undefined, imageUrl: url, accent: "#64748b" }
