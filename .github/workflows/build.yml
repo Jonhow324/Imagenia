@@ -1,0 +1,64 @@
+name: Build frontend
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "plugin/frontend/**"
+      - ".github/workflows/build.yml"
+  pull_request:
+    paths:
+      - "plugin/frontend/**"
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: plugin/frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: plugin/frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: plugin/frontend
+        run: npm run build
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-frontend-dist
+          path: plugin/frontend/dist/
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-frontend-dist
+          path: plugin/frontend/dist
+
+      - name: Package dist as zip
+        run: zip -r "imagenia-frontend-dist-${GITHUB_REF_NAME}.zip" plugin/frontend/dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: imagenia-frontend-dist-*.zip
