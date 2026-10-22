@@ -2,6 +2,136 @@
 
 Imagenia 是面向 QwenPaw 2.2.1 的本地 AI 图像工作台。当前仓库包含已经通过真实宿主验证的插件骨架，以及 React + Vite + Tailwind CSS + shadcn/ui 工作台。配置、生成和基于已有图片的编辑任务已接入插件 HTTP API；收藏和删除也已接入 HTTP API，仍需宿主验收。
 
+## 项目介绍
+
+Imagenia 是一个**本地优先的 AI 图像生成与编辑工作台**，以 QwenPaw 插件（`general` 类型、前后端一体）的形式运行：后端负责图像服务调用、任务队列、SQLite 元数据与本地文件存储，前端是运行在宿主 iframe 中的 React 单页工作台。生成的图片、提示词与服务配置都留在本机数据目录，不经过额外的同步服务。
+
+![Imagenia 工作台界面](docs/images/workbench-overview.png)
+
+*图 1：Imagenia 工作台。左侧是「创造新图像」表单（图像服务、模型、画面描述、画幅、质量），右侧是「图片资料库」，顶部提供任务队列、仅看收藏与配置入口。*
+
+工作台围绕「生成 → 整理 → 再次编辑」展开：一次生成或编辑对应一个后台任务，任务产出的图片作为全局共享的图片资产进入资料库；编辑不覆盖原图，而是新建资产并记录直接来源。
+
+### 核心能力
+
+- **多图像服务接入**：每套服务通过 `provider` 选择 `openai`（预设 `gpt-image-1`）、`minimax`（预设 `image-01`）或 `custom`（任意 OpenAI Images 兼容根地址），每套服务可配置多个模型，并声明各自支持的画幅、质量与编辑能力。
+- **生成与编辑**：表单只开放提示词、画幅（方形／横向／纵向）与质量（标准／高质量）；编辑从已有资产详情进入，结果作为新资产保存并保留来源关系。MiniMax 原生接口不支持编辑。
+- **后台任务队列**：提交返回 `202` 与 `job_id`，单 worker 串行执行，前端轮询任务状态（`pending`、`running`、`succeeded`、`failed`）；队列最多 50 个待处理任务，单任务超时 10 分钟，重启后恢复 `pending`，遗留 `running` 标记为中断。
+- **图片资料库**：全局共享，按 `created_at DESC, id DESC` 游标分页（默认每页 30 条），支持「全部／生成／编辑」筛选与「仅看收藏」，提供详情面板、收藏切换和二次确认删除。
+- **本地存储与隐私**：图片按年月与 UUID 存放在插件数据目录，元数据在 SQLite（schema v4）；提示词保存在本机、不写入运行日志；服务配置目录 `0700`、文件 `0600`，HTTP 接口不返回密钥。
+- **宿主样式隔离**：工作台在独立 iframe SPA 中运行，Tailwind 选择器限制在 `.imagenia-root` 下，不污染 QwenPaw Console。
+
+### 目录结构
+
+```text
+Imagenia/
+├── plugin/                     # QwenPaw 插件本体
+│   ├── plugin.json             # 插件清单：入口、版本、兼容范围
+│   ├── plugin.py               # 宿主入口与注册适配器
+│   ├── dev.py                  # 本地开发后端（fake / openai 两种模式）
+│   ├── src/imagenia_plugin/    # 路由、任务队列、存储、provider 适配器
+│   ├── frontend/               # React + Vite + Tailwind CSS + shadcn/ui 工作台
+│   ├── tests/                  # 后端 pytest 用例
+│   ├── docs/                   # 宿主验证记录
+│   └── README.md               # 插件说明（本文件）
+├── docs/
+│   ├── adr/                    # 架构决策记录 0001–0006
+│   ├── images/                 # 文档截图
+│   ├── technical-design.md     # 技术设计与 API 契约
+│   ├── ui-design.md            # UI 基线
+│   ├── imagenia-v1-spec.md     # V1 范围
+│   ├── plugin-release.md       # 发布清单与步骤
+│   └── *.md                    # QwenPaw 插件开发／发布调研
+├── CONTEXT.md                  # 项目目标、决策与领域词汇
+├── AGENTS.md                   # 仓库协作约定
+└── LICENSE                     # Apache License 2.0
+```
+
+### 快速开始
+
+前置条件：Python 3.11+、Node.js 22（前端测试依赖 `--experimental-strip-types`）；安装到宿主时需要 QwenPaw `>=2.2.1, <2.3.0`。
+
+安装插件（从 GitHub Release 下载与 tag 对应的 `imagenia-<tag>.zip`）：
+
+```bash
+qwenpaw plugin install /path/to/imagenia-v0.1.0.zip
+```
+
+本地开发，先安装依赖：
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -r plugin/requirements-dev.txt
+cd plugin/frontend && npm install
+```
+
+再分别启动后端与前端。终端一，在仓库根目录执行：
+
+```bash
+.venv/bin/python plugin/dev.py --reload
+```
+
+终端二：
+
+```bash
+cd plugin/frontend && npm run dev
+```
+
+浏览器打开 `http://127.0.0.1:5173`。默认是 fake 离线模式，不需要 API Key，也不产生费用；需要真实生图时改用 `.venv/bin/python plugin/dev.py --provider openai --reload`，命令参数与数据目录说明见下文「本地开发与验证」。
+
+运行测试与构建：
+
+```bash
+python -m pytest plugin/tests -q
+cd plugin/frontend && npm run typecheck && npm run build
+```
+
+### 文档索引
+
+| 文档 | 内容 |
+| --- | --- |
+| [CONTEXT.md](CONTEXT.md) | 项目目标、已确认决策、领域词汇 |
+| [docs/technical-design.md](docs/technical-design.md) | 模块边界、数据模型、API 契约、worker 生命周期 |
+| [docs/ui-design.md](docs/ui-design.md) | 工作台布局、组件与状态约束 |
+| [docs/imagenia-v1-spec.md](docs/imagenia-v1-spec.md) | V1 功能范围 |
+| [docs/adr/](docs/adr/) | 架构决策记录（核心架构、任务与生命周期、界面边界、隐私、多服务、内置预设） |
+| [docs/plugin-release.md](docs/plugin-release.md) | 发布包组装与平台上传步骤 |
+| [plugin/docs/qwenpaw-2.2.1-verification.md](plugin/docs/qwenpaw-2.2.1-verification.md) | QwenPaw 2.2.1 宿主验证记录 |
+
+### 当前状态与限制
+
+V1 核心功能（生成、编辑、收藏、删除、多服务配置）已实现并通过本地自动化测试；真实宿主验收（iframe 鉴权、真实网关生成／编辑、容器持久化）仍需补齐，因此界面截图用于说明当前工作台形态，不代表宿主验收结论。明确不在 V1 范围内：任意本地图片上传、蒙版与多图输入；批量生成、任务重试与取消；提示词历史、标签搜索、多个收藏夹；远程同步与对象存储。
+
+## 插件介绍
+
+Imagenia 插件向 QwenPaw 注册侧边栏入口「Imagenia」（`plugin.json` 的 `meta.menu`）与 `/imagenia` 路由，并把工作台作为同源 iframe 加载。插件是 `general` 类型：`entry.backend` 为 `plugin.py`，`entry.frontend` 为 `frontend/dist/index.js`，声明兼容 QwenPaw `>=2.2.1, <2.3.0`。
+
+![Imagenia 插件工作台](docs/images/plugin-panel.png)
+
+*图 2：插件工作台界面。左侧创作表单可选择图像服务与模型、填写画面描述（提示「提示词保存在本机」）、选择画幅与质量并「开始生成」；右侧图片资料库按全部／生成／编辑筛选，卡片带编辑、收藏与类型标签；顶部为任务队列、仅看收藏和配置入口。*
+
+### 界面与交互概览
+
+| 区域 | 当前行为 |
+| --- | --- |
+| 图像服务／模型 | 从已保存的服务中选择；未配置或不可用时禁用生成并提示前往配置，浏览器记住最近选择，失效时不自动切换 |
+| 画面描述 | 必填提示词，保存在本机，不写入运行日志 |
+| 画幅／质量 | 方形、横向、纵向；标准／高质量。选项受所选模型能力限制，MiniMax 请求不发送质量参数 |
+| 开始生成 | 提交后按钮显示「正在加入队列…」，返回 `202` 与任务 ID，前端每 1.5 秒轮询 |
+| 任务队列 | 顶部入口显示进行中数量，抽屉中查看最近任务，失败任务可恢复原参数后重新提交 |
+| 图片资料库 | 全局共享并显示已加载数量，支持全部／生成／编辑筛选与「仅看收藏」，游标加载更多 |
+| 图片卡片 | 缩略图、类型与收藏状态、尺寸和日期；点击进入详情，可收藏、编辑或删除 |
+| 配置 | 新增／编辑服务、模型能力与默认服务，可对已保存服务做只读连接测试 |
+
+### 安装、配置与使用
+
+1. **安装**：`qwenpaw plugin install /path/to/imagenia-<tag>.zip`；升级前备份数据目录。完整说明见「安装与升级」。
+2. **配置**：打开右上角「配置」新增一套服务，填写 API 根地址、API Key 和模型列表；服务类型创建后不可修改，需要换协议时新增服务。也可用 `IMAGENIA_OPENAI_*` 环境变量提供只读配置。详见「多图像服务与模型选择」。
+3. **使用**：选择服务与模型 → 填写画面描述 → 选择画幅与质量 →「开始生成」；任务完成后图片进入右侧资料库，在详情中选择「以此编辑」可生成新版本。
+4. **数据与卸载**：图片、SQLite 与配置位于插件数据目录（`IMAGENIA_DATA_DIR`，默认安装目录下的 `data/`），容器重建或卸载前请备份，详见「数据迁移与安装生命周期（Issue #10）」。
+
+> 待补充：QwenPaw 宿主内的最终验收结论（iframe 读写鉴权、真实网关生成／编辑、容器持久化）尚未闭合，当前判断依据为本地 fake 模式与自动化测试，记录见 `plugin/docs/qwenpaw-2.2.1-verification.md`。
+
 ## 安装与升级
 
 `plugin.json` 声明兼容 QwenPaw `>=2.2.1, <2.3.0`。从 GitHub Release 下载与版本对应的 `imagenia-<tag>.zip` 后安装：
