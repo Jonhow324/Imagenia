@@ -382,6 +382,13 @@ environment:
 
 本地回归 `python -m pytest plugin/tests -q` 覆盖首次安装、v1/v2 升级、幂等重启、迁移回滚与阻止注册、约束/外键/索引、配置/任务/收藏/图片保留、模拟停用和重装；不模拟 QwenPaw 的真实卸载文件策略。真机验收请在测试 volume 上备份后，核对覆盖安装、重启、停用与重装前后的配置状态、任务、收藏、图片可读性和文件权限，并确认卸载是否会连带删除默认目录，再决定生产数据路径。
 
+### 卸载
+
+- **界面卸载**：宿主会同时删除插件目录及其中的 `data/`，SQLite、服务配置和图片一并消失，卸载前请先备份（或把 `IMAGENIA_DATA_DIR` 指向安装目录之外）。
+- **命令行卸载**：`qwenpaw plugin uninstall imagenia` 只卸载插件、保留插件目录（宿主传入 `delete_files=False`，见 `loader.py:1489`）；此时目录仍在，重新安装会报 `Plugin installation target already exists`，请先手动删除残留目录，或重装时加 `--force`。
+
+`unregister()` 会先等待后台 worker 线程真正退出，再关闭数据库连接；即使一次请求超出等待时间仍在运行，其后续写入和超时定时器也会被关闭闸门拒绝，因此卸载后不会重新创建 `data/imagenia.sqlite3`。
+
 ## 许可证
 
 本插件以 Apache License 2.0 发布，与 QwenPaw 平台的发布要求一致；许可证全文见仓库根目录的 [LICENSE](../LICENSE)。

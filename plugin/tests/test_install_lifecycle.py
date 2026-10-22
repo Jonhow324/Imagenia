@@ -222,10 +222,12 @@ def test_disable_interrupts_inflight_job_and_never_publishes_late_result(tmp_pat
     try:
         assert entered.wait(2)
         old_worker = adapter.app.worker
+        # stop() clears the reference, so keep the thread for the late-result check.
+        old_thread = old_worker._thread
         adapter.unregister()
     finally:
         release.set()
-    old_worker._thread.join(timeout=2)
+    old_thread.join(timeout=2)
     with sqlite3.connect(tmp_path / "data" / "imagenia.sqlite3") as db:
         assert db.execute("SELECT status,error_code FROM generation_jobs WHERE id=?", (body["job_id"],)).fetchone() == ("failed", "interrupted")
         assert db.execute("SELECT COUNT(*) FROM image_assets").fetchone()[0] == 0

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -19,6 +20,8 @@ from .storage import open_database
 
 
 JOB_TIMEOUT_SECONDS = 600
+
+logger = logging.getLogger(__name__)
 
 
 def source_image(db: sqlite3.Connection, data_dir: Path, asset_id: str) -> tuple[bytes, str]:
@@ -51,9 +54,21 @@ class GenerationWorker:
         self.provider = provider
         self.resolve_provider = None
         self._stop = threading.Event()
+        # Shutdown gate: latched by stop() and never cleared. A thread that
+        # outlives the bounded join must not open or write the database again.
+        self._shutdown = False
         self._thread: threading.Thread | None = None
 
+    def _db_available(self) -> bool:
+        return not self._shutdown
+
     def recover(self) -> None:
+        if not self._db_available():
+            return
+        self._repair()
+
+    def _repair(self) -> None:
+        """Mark running jobs interrupted; only called on a thread holding the gate."""
         db = open_database(self.data_dir)
         try:
             with db:
@@ -76,22 +91,44 @@ class GenerationWorker:
             db.close()
 
     def start(self) -> None:
-        if self._thread is not None:
+        # stop() is terminal for one worker instance; each register() builds a
+        # new app (and worker), so a fresh instance is started after a disable.
+        if self._thread is not None or not self._db_available():
             return
         self.recover()
         self._thread = threading.Thread(target=self._run, name="imagenia-worker", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 5.0) -> None:
+        """Stop the worker and wait (bounded) until it no longer touches the database.
+
+        The join must stay bounded: QwenPaw calls this from its event loop, so an
+        unbounded join would freeze the host. A waiting worker normally leaves
+        within its 0.5s wait; a provider request cannot be interrupted, so a
+        worker inside one can outlive the timeout. That case is logged and the
+        late result is discarded (see process_next), never published. The
+        shutdown gate below makes that late result unable to touch the database.
+        """
+        # Latch the gate before signalling: anything resuming from here on (a
+        # provider call outliving the join, or a pending expiry timer) is refused.
+        self._shutdown = True
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=1)
-        # A provider call cannot be killed safely. Mark any in-flight job as
-        # interrupted now; its eventual result must never be published.
-        self.recover()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout)
+        self._thread = None
+        if thread is not None and thread.is_alive():
+            logger.warning("Imagenia worker did not stop within %.1fs", timeout)
+            # Never open the database here: the surviving thread's own writes are
+            # gated by _db_available(), and start()/recover() repairs the job later.
+            return
+        # The join proved the worker thread is gone, so this caller-thread repair
+        # cannot race with it. A provider call cannot be killed safely; mark any
+        # in-flight job as interrupted now so its result is never published.
+        self._repair()
 
     def _run(self) -> None:
-        while not self._stop.is_set():
+        while self._db_available() and not self._stop.is_set():
             try:
                 if not self.process_next():
                     self._stop.wait(0.5)
@@ -101,6 +138,9 @@ class GenerationWorker:
 
     def _expire(self, job_id: str) -> None:
         """Persist a deadline without interrupting a potentially billable provider call."""
+        # A timer can fire after stop(); never let it re-create the data directory.
+        if not self._db_available():
+            return
         try:
             db = open_database(self.data_dir)
             try:
@@ -117,7 +157,7 @@ class GenerationWorker:
 
     def process_next(self) -> bool:
         """Claim at most one pending job; also usable deterministically in HTTP tests."""
-        if self._stop.is_set():
+        if not self._db_available() or self._stop.is_set():
             return False
         db = open_database(self.data_dir)
         try:
@@ -157,18 +197,27 @@ class GenerationWorker:
                 timestamp = now()
                 date = datetime.now(UTC)
                 directory = self.data_dir / "images" / f"{date:%Y}" / f"{date:%m}"
-                private_directory(directory.parent)
-                private_directory(directory)
                 target = directory / f"{asset_id}{image_format.suffix}"
                 relative = target.relative_to(self.data_dir).as_posix()
+                # A stop that lands between the provider check above and this
+                # publish must not re-create the image directories the host has
+                # just deleted; refuse before touching the filesystem at all.
+                if not self._db_available():
+                    raise ProviderError("interrupted")
+                private_directory(directory.parent)
+                private_directory(directory)
                 try:
-                    if self._stop.is_set():
+                    if not self._db_available() or self._stop.is_set():
                         raise ProviderError("interrupted")
                     if time.monotonic() >= deadline:
                         raise ProviderError("timeout")
                     descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                     with os.fdopen(descriptor, "wb") as image:
                         image.write(content)
+                    # Check the gate again before opening a transaction: a stop
+                    # during the write must discard these bytes, not publish them.
+                    if not self._db_available() or self._stop.is_set():
+                        raise ProviderError("interrupted")
                     with db:
                         if self._stop.is_set():
                             raise ProviderError("interrupted")
@@ -194,6 +243,14 @@ class GenerationWorker:
                             finished_at=?, request_json=NULL WHERE id=?""", (asset_id, timestamp, job["id"]))
                 except Exception:
                     target.unlink(missing_ok=True)
+                    # Undo an empty image directory this attempt created. rmdir
+                    # refuses non-empty directories, so existing images, the
+                    # database and the data directory itself are never removed.
+                    for created in (directory, directory.parent, self.data_dir / "images"):
+                        try:
+                            created.rmdir()
+                        except OSError:
+                            pass
                     raise
             except Exception as exc:
                 code = "timeout" if isinstance(exc, TimeoutError) else (exc.code if isinstance(exc, ProviderError) and exc.code in {
@@ -207,9 +264,10 @@ class GenerationWorker:
                             "insufficient_balance": "图像服务账户余额不足，请充值或更换可用的 API Key。",
                             "invalid_request": "图像服务拒绝了请求参数，请调整提示词或画幅后重试。",
                             "service_unavailable": "图像服务暂时不可用，请稍后重新提交。"}
-                with db:
-                    db.execute("""UPDATE generation_jobs SET status='failed', error_code=?, error_message=?,
-                        finished_at=?, request_json=NULL WHERE id=? AND status='running'""", (code, messages[code], now(), job["id"]))
+                if self._db_available():
+                    with db:
+                        db.execute("""UPDATE generation_jobs SET status='failed', error_code=?, error_message=?,
+                            finished_at=?, request_json=NULL WHERE id=? AND status='running'""", (code, messages[code], now(), job["id"]))
             finally:
                 timer.cancel()
             return True

@@ -74,6 +74,7 @@ class ImageniaPlugin:
             )
             app.worker.start()
         except BaseException:
+            # Same order as unregister(): the worker must stop before its database.
             app.worker.stop()
             app.database.close()
             raise
@@ -81,6 +82,10 @@ class ImageniaPlugin:
 
     def unregister(self) -> None:
         if self.app is not None:
+            # Order matters: the worker thread must be fully stopped before the
+            # database is closed. A surviving thread would re-open the database
+            # after the host deletes the plugin directory and re-create
+            # data/imagenia.sqlite3, which then blocks re-installation.
             self.app.worker.stop()
             self.app._trace_thread("unregister")
             self.app.database.close()
