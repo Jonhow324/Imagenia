@@ -2,6 +2,8 @@ import * as React from "react"
 import {
   HeartIcon,
   ImagesIcon,
+  ListTodoIcon,
+  PlusIcon,
   Settings2Icon,
   SlidersHorizontalIcon,
 } from "lucide-react"
@@ -13,15 +15,16 @@ import { ApiKeyMissingAlert } from "@/components/imagenia/api-key-missing-alert"
 import { AssetDetailSheet } from "@/components/imagenia/asset-detail-sheet"
 import { AssetWaterfall } from "@/components/imagenia/asset-waterfall"
 import { SettingsSheet } from "@/components/imagenia/settings-sheet"
-import { GenerationForm } from "@/components/imagenia/generation-form"
+import { GenerationForm, createGenerationDraft } from "@/components/imagenia/generation-form"
 import { GenerationJobCard } from "@/components/imagenia/generation-job-card"
 import { PortalContainerProvider } from "@/components/imagenia/portal-root"
+import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { getServices, type CatalogStatus } from "@/services/settings"
 import { deleteAsset as removeAsset, enqueueGeneration, favoriteAsset, getAsset, getJob, listAssetPage, listJobs } from "@/services/generation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Toaster } from "@/components/ui/sonner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -50,8 +53,28 @@ export function ImageniaWorkbench() {
   const [settingsError, setSettingsError] = React.useState("")
   const [settingsLoading, setSettingsLoading] = React.useState(true)
   const configured = settingsStatus?.services.some(service => service.enabled && service.configured) ?? false
+  const [generationDraft, setGenerationDraft] = React.useState(createGenerationDraft)
   const [retryInput, setRetryInput] = React.useState<GenerateInput | null>(null)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [queueOpen, setQueueOpen] = React.useState(false)
+  const [creatorOpen, setCreatorOpen] = React.useState(false)
+  const [isCompact, setIsCompact] = React.useState(() => window.matchMedia("(max-width: 767px), (max-height: 539px)").matches)
+  const libraryScroll = React.useRef<HTMLDivElement | null>(null)
+  const activeJobs = jobs.filter(job => job.status === "pending" || job.status === "running").length
+
+  React.useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px), (max-height: 539px)")
+    const update = () => setIsCompact(media.matches)
+    media.addEventListener("change", update)
+    update()
+    return () => media.removeEventListener("change", update)
+  }, [])
+
+  function revealCreator() {
+    setQueueOpen(false)
+    setCreatorOpen(true)
+    window.requestAnimationFrame(() => document.getElementById("imagenia-prompt")?.focus({ preventScroll: true }))
+  }
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [isLoading, setIsLoading] = React.useState(true)
   const [nextCursor, setNextCursor] = React.useState<string | null>(null)
@@ -182,6 +205,7 @@ export function ImageniaWorkbench() {
     setLoadMoreError(false)
     setLibraryError("")
     setNextCursor(null)
+    if (libraryScroll.current) libraryScroll.current.scrollTop = 0
     closeDetail()
     listAssetPage({ favorite: favoriteOnly, kind: kindFilter, signal: controller.signal }).then((page) => {
       if (!controller.signal.aborted) {
@@ -306,7 +330,7 @@ export function ImageniaWorkbench() {
       editingUrl.current = detail.imageUrl
       setEditingAsset(detail)
       closeDetail()
-      window.scrollTo({ top: 0, behavior: "smooth" })
+      revealCreator()
     } catch (cause) {
       if (!controller.signal.aborted) toast.error(cause instanceof Error ? cause.message : "来源图片无法加载。")
     } finally {
@@ -330,7 +354,7 @@ export function ImageniaWorkbench() {
     } else cancelEdit()
     setRetryInput({ prompt: job.prompt, size: job.options.size, quality: job.options.quality,
       serviceId: job.serviceId, modelId: job.modelId, sourceAssetId: job.sourceAssetId })
-    window.scrollTo({ top: 0, behavior: "smooth" })
+    revealCreator()
     toast.info("已恢复参数，请确认服务和模型后提交。")
   }
 
@@ -345,6 +369,7 @@ export function ImageniaWorkbench() {
         options: { size: input.size, quality: input.quality }, sourceAssetId: input.sourceAssetId }, ...current])
       toast.info("任务已加入队列")
       if (input.sourceAssetId) cancelEdit()
+      setCreatorOpen(false)
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "提交失败，请稍后重试。")
     } finally { setIsSubmitting(false) }
@@ -355,94 +380,91 @@ export function ImageniaWorkbench() {
     setKindFilter("all")
   }
 
+  const generationForm = <GenerationForm
+    configured={configured}
+    draft={generationDraft}
+    onDraftChange={setGenerationDraft}
+    catalog={settingsStatus}
+    retryInput={retryInput}
+    editingAsset={editingAsset}
+    isSubmitting={isSubmitting}
+    onCancelEdit={cancelEdit}
+    onSubmit={submitGeneration}
+  />
+
   return (
-    <main className="imagenia-root min-h-full bg-background text-foreground">
+    <main className="imagenia-root imagenia-workbench">
       <PortalContainerProvider container={portalContainer}>
         <TooltipProvider>
-          <div className="mx-auto w-full max-w-[1540px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
-            <header className="mb-6 flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-3">
+          <div className="mx-auto flex h-full w-full max-w-[1540px] flex-col gap-4 p-3 sm:p-4 lg:px-6">
+            <header className="flex shrink-0 items-center justify-between gap-3 border-b pb-3">
+              <div className="flex min-w-0 items-center gap-2 sm:gap-3">
                 <img
                   src={imageniaIconUrl}
                   alt=""
                   aria-hidden="true"
-                  width={44}
-                  height={44}
-                  className="size-11 shrink-0"
+                  width={40}
+                  height={40}
+                  className="size-9 shrink-0 sm:size-10"
                 />
                 <div>
                   <div className="flex items-center gap-2">
-                    <h1 className="text-xl font-semibold tracking-tight">Imagenia</h1>
-                    <Badge variant="secondary">本地工作台</Badge>
+                    <h1 className="m-0 text-lg font-semibold tracking-tight sm:text-xl">Imagenia</h1>
+                    <Badge variant="secondary" className="hidden lg:inline-flex">本地工作台</Badge>
                   </div>
-                  <p className="mt-0.5 text-sm text-muted-foreground">生成、编辑并整理你的图像资产</p>
+                  <p className="mb-0 mt-0.5 hidden text-xs text-muted-foreground sm:block">生成、编辑并整理你的图像资产</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+                {isCompact ? <Button type="button" size="sm" onClick={revealCreator} aria-label="打开创作面板" title="打开创作面板">
+                  <PlusIcon data-icon="inline-start" /><span className="hidden sm:inline">创作</span>
+                </Button> : null}
+                <Button type="button" variant="outline" size="sm" onClick={() => setQueueOpen(true)}
+                  aria-label={`查看任务队列，${activeJobs} 个进行中`} title="查看任务队列">
+                  <ListTodoIcon data-icon="inline-start" /><span className="hidden sm:inline">任务队列</span>
+                  <Badge variant={activeJobs ? "default" : "secondary"}>{activeJobs}</Badge>
+                </Button>
                 <Button
                   type="button"
                   variant={favoriteOnly ? "secondary" : "outline"}
+                  size="sm"
+                  aria-label="仅看收藏"
+                  title="仅看收藏"
                   aria-pressed={favoriteOnly}
                   onClick={() => setFavoriteOnly((value) => !value)}
                 >
                   <HeartIcon className={favoriteOnly ? "fill-current text-rose-600" : ""} aria-hidden="true" />
-                  仅看收藏
+                  <span className="hidden sm:inline">仅看收藏</span>
                 </Button>
-                <Button type="button" variant="outline" onClick={() => setSettingsOpen(true)}>
+                <Button type="button" variant="outline" size="sm" aria-label="配置" title="配置" onClick={() => setSettingsOpen(true)}>
                   <Settings2Icon aria-hidden="true" />
-                  配置
+                  <span className="hidden sm:inline">配置</span>
                 </Button>
               </div>
             </header>
 
             {settingsError ? (
-              <Alert variant="destructive" className="mb-5">
+              <Alert variant="destructive" className="shrink-0">
                 <AlertTitle>配置读取失败</AlertTitle>
                 <AlertDescription>{settingsError}</AlertDescription>
               </Alert>
             ) : null}
             {!settingsLoading && !settingsError && !configured ? (
-              <div className="mb-5">
+              <div className="shrink-0">
                 <ApiKeyMissingAlert onConfigure={() => setSettingsOpen(true)} />
               </div>
             ) : null}
 
-            <div className="grid items-start gap-6 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]">
-              <aside className="grid gap-4 lg:sticky lg:top-5">
-                <GenerationForm
-                  configured={configured}
-                  catalog={settingsStatus}
-                  retryInput={retryInput}
-                  editingAsset={editingAsset}
-                  isSubmitting={isSubmitting}
-                  onCancelEdit={cancelEdit}
-                  onSubmit={submitGeneration}
-                />
-
-                <Card className="bg-card/80">
-                  <CardHeader className="border-b pb-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <CardTitle>最近任务</CardTitle>
-                        <CardDescription>每 1–2 秒自动刷新状态</CardDescription>
-                      </div>
-                      <Badge variant="outline">{jobs.filter((job) => job.status === "pending" || job.status === "running").length} 进行中</Badge>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="grid gap-2.5">
-                    {jobs.slice(0, 3).map((job) => <GenerationJobCard key={job.id} job={job} onRetry={retryGeneration} />)}
-                  </CardContent>
-                </Card>
-              </aside>
-
-              <section aria-labelledby="library-title" className="min-w-0">
-                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div className={cn("grid min-h-0 flex-1 gap-4", !isCompact && "md:grid-cols-[minmax(280px,340px)_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]")}>
+              {!isCompact ? <aside className="flex min-h-0 flex-col" aria-label="图像创作">{generationForm}</aside> : null}
+              <section aria-labelledby="library-title" className="flex min-h-0 min-w-0 flex-col">
+                <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2">
                       <ImagesIcon className="size-5 text-muted-foreground" aria-hidden="true" />
-                      <h2 id="library-title" className="text-lg font-semibold">图片资料库</h2>
+                      <h2 id="library-title" className="m-0 text-lg font-semibold">图片资料库</h2>
                     </div>
-                    <p className="mt-1 text-sm text-muted-foreground">{assets.length} 张已加载作品 · 全局共享</p>
+                    <p className="mb-0 mt-1 text-sm text-muted-foreground">{assets.length} 张已加载作品 · 全局共享</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <SlidersHorizontalIcon className="size-4 text-muted-foreground" aria-hidden="true" />
@@ -462,6 +484,8 @@ export function ImageniaWorkbench() {
                   </div>
                 </div>
 
+                <div ref={libraryScroll} role="region" aria-label="图片资产列表" tabIndex={0}
+                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-lg pr-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 {libraryError && !isLoading ? (
                   <Alert variant="destructive">
                     <AlertTitle>图片资料库加载失败</AlertTitle>
@@ -481,9 +505,35 @@ export function ImageniaWorkbench() {
                   onOpen={(asset) => selectAsset(asset.id)}
                   onToggleFavorite={toggleFavorite}
                 />}
+                </div>
               </section>
             </div>
           </div>
+
+          <Sheet open={queueOpen} onOpenChange={setQueueOpen}>
+            <SheetContent className="flex min-h-0 w-full flex-col sm:max-w-md">
+              <SheetHeader className="shrink-0 border-b">
+                <SheetTitle>任务队列 <Badge variant="secondary">{activeJobs} 进行中</Badge></SheetTitle>
+                <SheetDescription>最近 {jobs.length} 个任务，每 1–2 秒刷新；失败后可恢复参数，由你确认后重新提交。</SheetDescription>
+              </SheetHeader>
+              <div className="grid min-h-0 flex-1 auto-rows-max content-start gap-3 overflow-y-auto overscroll-contain px-4 pb-4" aria-label="最近任务列表">
+                {jobs.length ? jobs.map(job => <GenerationJobCard key={job.id} job={job} onRetry={retryGeneration} />)
+                  : <p className="py-8 text-center text-sm text-muted-foreground">还没有任务，提交后可在这里查看进度。</p>}
+              </div>
+            </SheetContent>
+          </Sheet>
+
+          {isCompact ? <Sheet open={creatorOpen} onOpenChange={setCreatorOpen}>
+            <SheetContent side="bottom" className="flex min-h-0 flex-col p-3 data-[side=bottom]:h-[min(92dvh,720px)]">
+              <SheetHeader className="shrink-0 px-1 pb-2 pt-0">
+                <SheetTitle>{editingAsset ? "编辑图片" : "图像创作"}</SheetTitle>
+                <SheetDescription className="sr-only">选择服务和模型，确认参数后提交任务。</SheetDescription>
+              </SheetHeader>
+              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
+                <div className={cn("flex flex-1 flex-col", editingAsset ? "min-h-[540px]" : "min-h-[440px]")}>{generationForm}</div>
+              </div>
+            </SheetContent>
+          </Sheet> : null}
 
           <AssetDetailSheet
             asset={selectedAsset}

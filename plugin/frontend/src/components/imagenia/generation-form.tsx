@@ -18,8 +18,23 @@ import { initialServiceSelection, rememberServiceSelection, selectedServiceModel
 import type { CatalogStatus, ServiceSelection } from "@/services/settings"
 import type { GenerateInput, ImageAsset, ImageQuality, ImageSize } from "@/mocks/imagenia-service"
 
+export interface GenerationDraft {
+  prompt: string
+  size: ImageSize
+  quality: ImageQuality
+  selection: ServiceSelection | null
+  sourceAssetId?: string
+  restoredInput?: GenerateInput | null
+}
+
+export function createGenerationDraft(): GenerationDraft {
+  return { prompt: "", size: "square", quality: "standard", selection: null }
+}
+
 export function GenerationForm({
   configured,
+  draft,
+  onDraftChange,
   catalog,
   retryInput,
   editingAsset,
@@ -28,6 +43,8 @@ export function GenerationForm({
   onSubmit,
 }: {
   configured: boolean
+  draft: GenerationDraft
+  onDraftChange: React.Dispatch<React.SetStateAction<GenerationDraft>>
   catalog: CatalogStatus | null
   retryInput: GenerateInput | null
   editingAsset: ImageAsset | null
@@ -35,18 +52,17 @@ export function GenerationForm({
   onCancelEdit: () => void
   onSubmit: (input: GenerateInput) => void
 }) {
-  const [selection, setSelection] = React.useState<ServiceSelection | null>(null)
-  const initialized = React.useRef(false)
+  const { selection, prompt, size, quality } = draft
+  const setSelection = (selection: ServiceSelection | null) => onDraftChange(value => ({ ...value, selection }))
+  const setPrompt = (prompt: string) => onDraftChange(value => ({ ...value, prompt }))
+  const setSize = (size: ImageSize) => onDraftChange(value => ({ ...value, size }))
+  const setQuality = (quality: ImageQuality) => onDraftChange(value => ({ ...value, quality }))
   const chosen = selectedServiceModel(catalog, selection, Boolean(editingAsset))
-  const [prompt, setPrompt] = React.useState("")
-  const [size, setSize] = React.useState<ImageSize>("square")
-  const [quality, setQuality] = React.useState<ImageQuality>("standard")
   const [error, setError] = React.useState("")
   const validOptions = Boolean(chosen.model?.sizes.includes(size) && chosen.model.qualities.includes(quality))
 
   React.useEffect(() => {
-    if (catalog && (!initialized.current || (selection === null && catalog.default !== null))) {
-      initialized.current = true
+    if (catalog && selection === null) {
       const initial = initialServiceSelection(catalog)
       setSelection(initial)
       const target = selectedServiceModel(catalog, initial, false).model
@@ -66,25 +82,18 @@ export function GenerationForm({
   }
 
   React.useEffect(() => {
-    if (editingAsset) {
-      setPrompt(`以这张图片为基础，${editingAsset.prompt}`)
-      setSize(editingAsset.size)
-      setError("")
-    } else {
-      setPrompt("")
-      setSize("square")
-      setQuality("standard")
-      setError("")
-    }
+    if (draft.sourceAssetId === editingAsset?.id) return
+    onDraftChange(value => ({ ...value, sourceAssetId: editingAsset?.id,
+      prompt: editingAsset ? `以这张图片为基础，${editingAsset.prompt}` : "",
+      size: editingAsset?.size ?? "square", quality: "standard" }))
+    setError("")
   }, [editingAsset])
 
   React.useEffect(() => {
-    if (!retryInput) return
-    setPrompt(retryInput.prompt)
-    setSize(retryInput.size)
-    setQuality(retryInput.quality)
-    const next = { service_id: retryInput.serviceId ?? "", model_id: retryInput.modelId ?? "" }
-    setSelection(next)
+    if (!retryInput || draft.restoredInput === retryInput) return
+    onDraftChange(value => ({ ...value, prompt: retryInput.prompt, size: retryInput.size,
+      quality: retryInput.quality, restoredInput: retryInput,
+      selection: { service_id: retryInput.serviceId ?? "", model_id: retryInput.modelId ?? "" } }))
     setError("")
   }, [retryInput])
 
@@ -105,15 +114,15 @@ export function GenerationForm({
   }
 
   return (
-    <Card className="border-0 bg-card/95 shadow-sm ring-1 ring-foreground/10">
-      <CardHeader className="border-b pb-4">
+    <Card size="sm" className="min-h-0 flex-1 border-0 bg-card/95 shadow-sm ring-1 ring-foreground/10">
+      <CardHeader className="shrink-0 border-b">
         <div className="flex items-start justify-between gap-3">
           <div className="grid gap-1">
-            <CardTitle className="flex items-center gap-2 text-lg">
+            <CardTitle className="flex items-center gap-2">
               {editingAsset ? <ImagePlusIcon className="size-4" aria-hidden="true" /> : <SparklesIcon className="size-4" aria-hidden="true" />}
               {editingAsset ? "编辑图片" : "创造新图像"}
             </CardTitle>
-            <CardDescription>
+            <CardDescription className="text-xs">
               {editingAsset ? "编辑会生成一张新资产，不会覆盖原图。" : "描述画面，Imagenia 会把任务加入本地队列。"}
             </CardDescription>
           </div>
@@ -125,17 +134,18 @@ export function GenerationForm({
         </div>
         {editingAsset ? (
           <div className="mt-2 flex items-center gap-3 rounded-lg border bg-muted/50 p-2.5">
-            <img className="size-12 rounded-md object-cover" src={editingAsset.imageUrl} alt="当前编辑来源" />
+            <img className="size-9 shrink-0 rounded-md object-cover" src={editingAsset.imageUrl} alt="当前编辑来源" />
             <div className="min-w-0">
-              <p className="text-xs font-medium">来源图片</p>
-              <p className="truncate text-xs text-muted-foreground">{editingAsset.prompt}</p>
+              <p className="m-0 text-xs font-medium">来源图片</p>
+              <p className="m-0 truncate text-xs text-muted-foreground">{editingAsset.prompt}</p>
             </div>
           </div>
         ) : null}
       </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} noValidate>
-          <FieldGroup>
+      <CardContent className="flex min-h-0 flex-1 flex-col">
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col" noValidate>
+          <FieldGroup className="min-h-0 flex-1 gap-3">
+            <div className="grid shrink-0 grid-cols-2 gap-3">
             <Field>
               <FieldLabel htmlFor="imagenia-service">图像服务</FieldLabel>
               <Select value={chosen.service?.id ?? ""} disabled={isSubmitting}
@@ -170,7 +180,8 @@ export function GenerationForm({
               {!chosen.valid && configured ? <FieldError>所选服务或模型不可用，或未启用编辑能力。请重新选择；不会自动切换服务。</FieldError> : null}
               {chosen.valid && !validOptions ? <FieldError>此模型不支持当前画幅或质量，请重新选择参数。</FieldError> : null}
             </Field>
-            <Field data-invalid={Boolean(error)}>
+            </div>
+            <Field className="min-h-0 flex-1" data-invalid={Boolean(error)}>
               <FieldLabel htmlFor="imagenia-prompt">画面描述</FieldLabel>
               <Textarea
                 id="imagenia-prompt"
@@ -179,13 +190,13 @@ export function GenerationForm({
                 disabled={!configured || isSubmitting}
                 onChange={(event) => setPrompt(event.target.value)}
                 placeholder="例如：雨后的上海弄堂，暖色窗光，电影感，35mm 胶片质感……"
-                className="min-h-32 resize-none"
+                className="min-h-16 flex-1 resize-none"
               />
-              <FieldDescription>提示词会作为资产信息保存在本机，但不会写入普通运行日志。</FieldDescription>
+              <FieldDescription className="m-0 text-xs">提示词保存在本机，不写入运行日志。</FieldDescription>
               {error ? <FieldError>{error}</FieldError> : null}
             </Field>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid shrink-0 grid-cols-2 gap-3">
               <Field>
                 <FieldLabel htmlFor="imagenia-size">画幅</FieldLabel>
                 <Select value={size} onValueChange={value => { if (chosen.model?.sizes.includes(value as ImageSize)) setSize(value as ImageSize) }} disabled={!configured || isSubmitting}>
@@ -214,7 +225,7 @@ export function GenerationForm({
               </Field>
             </div>
 
-            <Button type="submit" size="lg" disabled={!configured || !chosen.valid || !validOptions || isSubmitting} className="w-full">
+            <Button type="submit" size="lg" disabled={!configured || !chosen.valid || !validOptions || isSubmitting} className="w-full shrink-0">
               {isSubmitting ? <Spinner aria-hidden="true" /> : <SparklesIcon aria-hidden="true" />}
               {isSubmitting ? "正在加入队列…" : editingAsset ? "生成编辑版本" : "开始生成"}
             </Button>

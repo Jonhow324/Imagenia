@@ -14,14 +14,28 @@ function t() {
 	});
 }
 function n() {
-	return window.QwenPaw.host.React.createElement("iframe", {
+	let e = window.QwenPaw.host.React, t = () => {};
+	function n(e) {
+		if (t(), !e) return;
+		let n = () => {
+			let t = e.parentElement && Number.parseFloat(window.getComputedStyle(e.parentElement).paddingBottom) || 0, n = Math.max(0, window.innerHeight - Math.max(0, e.getBoundingClientRect().top) - t);
+			e.style.height = `${n}px`;
+		};
+		n(), window.addEventListener("resize", n);
+		let r = new ResizeObserver(n);
+		e.parentElement && r.observe(e.parentElement), t = () => {
+			window.removeEventListener("resize", n), r.disconnect();
+		};
+	}
+	return e.createElement("iframe", {
+		ref: n,
 		title: "Imagenia 工作台",
 		src: "/api/frontend_plugin/imagenia/files/frontend/dist/app/index.html",
 		style: {
 			display: "block",
 			width: "100%",
-			height: "100vh",
-			minHeight: "600px",
+			height: "100%",
+			minHeight: 0,
 			border: 0
 		}
 	});

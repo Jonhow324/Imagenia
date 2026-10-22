@@ -31,6 +31,29 @@ test("Blob-loaded host entry registers the menu and route without importing anot
     assert.equal(calls[0][0], "iframe")
     assert.equal(calls[0][1].src, "/api/frontend_plugin/imagenia/files/frontend/dist/app/index.html")
     assert.ok(calls[0][1].title)
+    // The host has navigation above and padding below its route. The iframe
+    // must fit the remaining viewport and release listeners when unmounted.
+    const listeners = new Map()
+    let resizeObserver
+    globalThis.ResizeObserver = class {
+      constructor(callback) { this.callback = callback; resizeObserver = this }
+      observe() {}
+      disconnect() { this.disconnected = true }
+    }
+    window.innerHeight = 720
+    window.getComputedStyle = () => ({ paddingBottom: "24px" })
+    window.addEventListener = (name, callback) => listeners.set(name, callback)
+    window.removeEventListener = (name, callback) => { if (listeners.get(name) === callback) listeners.delete(name) }
+    const iframe = { style: {}, parentElement: {}, getBoundingClientRect: () => ({ top: 96 }) }
+    calls[0][1].ref(iframe)
+    assert.equal(iframe.style.height, "600px")
+    window.innerHeight = 620
+    listeners.get("resize")()
+    assert.equal(iframe.style.height, "500px")
+    calls[0][1].ref(null)
+    assert.equal(listeners.size, 0)
+    assert.equal(resizeObserver.disconnected, true)
+    delete globalThis.ResizeObserver
   } finally {
     delete globalThis.window
   }

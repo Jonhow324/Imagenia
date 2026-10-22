@@ -79,3 +79,12 @@
 .imagenia-root [data-sonner-toaster] {
   font-family: var(--font-sans);
 }
+
+/* Root utilities are intentionally scoped to descendants; size the iframe app
+   itself explicitly without changing the layout of portal scope wrappers. */
+.imagenia-root.imagenia-workbench {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  background: hsl(var(--background));
+}
