@@ -101,7 +101,8 @@ async def test_restart_interrupts_running_and_resumes_pending_without_retry(tmp_
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("upstream_code", ["rate_limited", "invalid_response", "service_unavailable"])
+@pytest.mark.parametrize("upstream_code", ["rate_limited", "invalid_response", "service_unavailable",
+                                          "insufficient_balance", "invalid_request"])
 async def test_provider_failure_http_response_and_logs_are_redacted(tmp_path, monkeypatch, caplog, upstream_code):
     from src.imagenia_plugin.provider import ProviderError
     monkeypatch.setenv("IMAGENIA_OPENAI_API_KEY", "sk-private")

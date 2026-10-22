@@ -198,11 +198,14 @@ class GenerationWorker:
             except Exception as exc:
                 code = "timeout" if isinstance(exc, TimeoutError) else (exc.code if isinstance(exc, ProviderError) and exc.code in {
                     "not_configured", "invalid_api_key", "invalid_image", "source_unavailable",
-                    "timeout", "rate_limited", "invalid_response", "interrupted", "configuration_changed"} else "service_unavailable")
+                    "timeout", "rate_limited", "invalid_response", "interrupted", "configuration_changed",
+                    "edit_not_supported", "insufficient_balance", "invalid_request"} else "service_unavailable")
                 messages = {"configuration_changed": "服务配置已变化，请确认后重新提交。", "not_configured": "请先配置 API Key。", "invalid_api_key": "API Key 无效，请检查配置。",
                             "invalid_image": "服务返回的图片无效，请重新提交。", "source_unavailable": "来源图片已不可用，请重新选择。",
                             "timeout": "图像服务超时，请重新提交。", "interrupted": "任务已中断，请重新提交。", "rate_limited": "图像服务请求过于频繁，请稍后重试。",
-                            "invalid_response": "图像服务响应无效，请稍后重试。",
+                            "invalid_response": "图像服务响应无效，请稍后重试。", "edit_not_supported": "此图像服务不支持编辑，请选择其他服务。",
+                            "insufficient_balance": "图像服务账户余额不足，请充值或更换可用的 API Key。",
+                            "invalid_request": "图像服务拒绝了请求参数，请调整提示词或画幅后重试。",
                             "service_unavailable": "图像服务暂时不可用，请稍后重新提交。"}
                 with db:
                     db.execute("""UPDATE generation_jobs SET status='failed', error_code=?, error_message=?,

@@ -111,6 +111,21 @@ class OpenAIImageProvider:
             raise ProviderError("service_unavailable") from None
 
 
+# MiniMax reports business failures as HTTP 200 with ``base_resp.status_code``.
+# Keep the actionable ones distinct so the worker can explain the real cause
+# instead of collapsing everything into "service unavailable".
+MINIMAX_ERROR_CODES = {
+    1002: "rate_limited",
+    1004: "invalid_api_key",
+    1008: "insufficient_balance",
+    2013: "invalid_request",
+}
+
+
+def minimax_error_code(status_code: object) -> str:
+    return MINIMAX_ERROR_CODES.get(status_code, "service_unavailable")
+
+
 class MiniMaxImageProvider:
     """Generate one image with MiniMax's native image_generation endpoint.
 
@@ -151,12 +166,13 @@ class MiniMaxImageProvider:
             base_resp = payload.get("base_resp")
             status_code = base_resp.get("status_code", 0) if isinstance(base_resp, dict) else 0
             if status_code:
-                raise ProviderError("service_unavailable")
+                raise ProviderError(minimax_error_code(status_code))
             return base64.b64decode(payload["data"]["image_base64"][0], validate=True)
         except ProviderError:
             raise
         except urllib.error.HTTPError as exc:
             code = ("invalid_api_key" if exc.code in (401, 403) else
+                    "insufficient_balance" if exc.code == 402 else
                     "rate_limited" if exc.code == 429 else "service_unavailable")
             raise ProviderError(code) from None
         except urllib.error.URLError as exc:
