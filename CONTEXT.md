@@ -61,6 +61,12 @@
 - 本地图片同步上传接口；
 - 远程服务器或对象存储适配。
 
+## 发布流程
+
+- 插件经 AgentScope Platform 发布：上传包为 ZIP 且不超过 10MB，需确认拥有发布权利并以 Apache 2.0 授权，通过平台安全扫描前插件保持私有。
+- `v*` 标签触发 CI 构建前端并组装完整插件包 `imagenia-<tag>.zip` 附到 GitHub Release；tag 必须与 `plugin.json` 的 `version` 一致。
+- 发布要求核查见 `docs/qwenpaw-plugin-publish-research.md`，发布清单与操作步骤见 `docs/plugin-release.md`。
+
 ## 设计状态
 
 V1 核心功能已实现；多服务选择与内置 OpenAI／MiniMax 预设分别按已接受的 ADR 0005、ADR 0006 实现，并通过本地测试验证，真实宿主验收仍需补齐。已确认的隐私与工作台交互决策见 `docs/adr/0004-privacy-and-workbench-interactions.md`，完整技术设计见 `docs/technical-design.md`。

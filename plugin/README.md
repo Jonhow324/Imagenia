@@ -2,6 +2,16 @@
 
 Imagenia 是面向 QwenPaw 2.2.1 的本地 AI 图像工作台。当前仓库包含已经通过真实宿主验证的插件骨架，以及 React + Vite + Tailwind CSS + shadcn/ui 工作台。配置、生成和基于已有图片的编辑任务已接入插件 HTTP API；收藏和删除也已接入 HTTP API，仍需宿主验收。
 
+## 安装与升级
+
+`plugin.json` 声明兼容 QwenPaw `>=2.2.1, <2.3.0`。从 GitHub Release 下载与版本对应的 `imagenia-<tag>.zip` 后安装：
+
+```bash
+qwenpaw plugin install /path/to/imagenia-v0.1.0.zip
+```
+
+也可以把 ZIP 放到可直连的 URL 后使用 `qwenpaw plugin install <url>`。升级前先备份数据目录；覆盖安装、升级迁移与卸载的数据保留行为见下文“数据迁移与安装生命周期（Issue #10）”。发布包的组装方式、平台上传限制与发布步骤见 [docs/plugin-release.md](../docs/plugin-release.md)。
+
 ## 前端工作台
 
 前端源码位于 `plugin/frontend/src/`，构建产物分为两部分：
@@ -78,7 +88,7 @@ npm run build
 
 `npm run build` 依次类型检查、构建 `dist/app/`、构建 `dist/index.js` 并运行产物与配置请求测试。`npm run test:build` 可以在已有产物上单独运行。将整个 `plugin/`（包括两个前端产物）同步到宿主后重启插件，在 QwenPaw 2.2.1 验证侧边栏、iframe 加载、交互与浏览器控制台。
 
-**构建产物不入库**：`plugin/frontend/dist/` 已被 Git 忽略，克隆仓库后本地没有该目录，必须先执行 `npm install && npm run build` 生成产物，再同步到宿主。正式发布产物由 GitHub Actions 在推送 `v*` 标签时构建（见 `.github/workflows/build.yml`），并打包为 zip 附在对应的 GitHub Release 上；普通 push 到 `main` 和 PR 只构建并上传 artifact，不创建 Release。
+**构建产物不入库**：`plugin/frontend/dist/` 已被 Git 忽略，克隆仓库后本地没有该目录，必须先执行 `npm install && npm run build` 生成产物，再同步到宿主。正式发布产物由 GitHub Actions 在推送 `v*` 标签时构建（见 `.github/workflows/build.yml`），组装完整插件包 `imagenia-<tag>.zip`（清单、后端入口、依赖声明、README 与两个前端产物）附在对应的 GitHub Release 上，tag 必须与 `plugin.json` 的 `version` 一致；普通 push 到 `main` 和 PR 只构建并上传 artifact，不创建 Release。发布包内容、平台限制与操作步骤见 [docs/plugin-release.md](../docs/plugin-release.md)。
 
 Tailwind preflight 已关闭，选择器限制在 `.imagenia-root` 下；Select、Tooltip、Sheet 和 AlertDialog 使用工作台自己的 portal 容器。iframe 进一步隔离了工作台样式和宿主页面。
 
