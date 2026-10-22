@@ -111,7 +111,8 @@ export async function getAsset(id: string, signal?: AbortSignal): Promise<ImageA
 
 async function imageUrl(id: string, signal?: AbortSignal): Promise<string> {
   const response = await authenticatedFetch(`/assets/${encodeURIComponent(id)}/content`, { signal })
-  if (!response.ok || !(response.headers.get("content-type") ?? "").startsWith("image/png")) {
+  // Providers may return PNG or JPEG; the backend validates and preserves the original bytes.
+  if (!response.ok || !(response.headers.get("content-type") ?? "").toLowerCase().startsWith("image/")) {
     throw new SettingsRequestError("image_unavailable", "图片暂时无法加载。")
   }
   const blob = await response.blob()

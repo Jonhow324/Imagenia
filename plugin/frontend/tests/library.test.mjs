@@ -35,6 +35,22 @@ test("filtered cursor page and direct detail use authenticated content without t
   assert.ok(calls.every(({ url, init }) => init.headers.Authorization === "Bearer private-session" && !url.includes("private-session")))
 })
 
+test("mixed PNG and JPEG assets load without rejecting the page", async () => {
+  const { revoked } = fixture()
+  globalThis.fetch = async (url) => {
+    if (url.endsWith("/assets")) return Response.json({ items: [resource("png"), resource("jpeg")], next_cursor: null })
+    if (url.endsWith("/png/content")) return new Response(new Blob(["png"], { type: "image/png" }),
+      { headers: { "content-type": "image/png" } })
+    if (url.endsWith("/jpeg/content")) return new Response(new Blob(["jpeg"], { type: "image/jpeg" }),
+      { headers: { "content-type": "image/jpeg" } })
+    throw Error("unexpected URL")
+  }
+  const page = await listAssetPage()
+  assert.deepEqual(page.items.map((asset) => asset.id), ["png", "jpeg"])
+  assert.deepEqual(page.items.map((asset) => asset.imageUrl), ["blob:asset-1", "blob:asset-2"])
+  assert.deepEqual(revoked, [])
+})
+
 test("partial page failure revokes every created object URL and preserves safe 401", async () => {
   const { revoked } = fixture()
   globalThis.fetch = async (url) => {
