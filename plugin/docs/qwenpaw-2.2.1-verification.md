@@ -49,7 +49,7 @@ QwenPaw 2.2.1 能够发现并加载 Imagenia，调用后端 `register(api)`，�
 - 开发环境可将仓库的 `plugin/` 符号链接到扫描目录中的 `imagenia`
 - 后端路由通过 `api.register_http_router(...)` 注册
 - 插件数据目录可通过 `IMAGENIA_DATA_DIR` 覆盖
-- 本次历史验证时，未设置覆盖变量默认写入 `~/.qwenpaw/plugins/imagenia`；2026-10-21 起新安装默认使用插件安装目录下的 `data/`，旧数据兼容与迁移步骤见 [插件 README](../README.md#旧版本数据迁移)。新路径的容器重建场景目前仅通过本地模拟回归，尚未补充真机验证
+- 本次历史验证时，未设置覆盖变量默认写入 `~/.qwenpaw/plugins/imagenia`；2026-10-21 起新安装默认使用插件安装目录下的 `data/`，旧数据兼容与迁移步骤见 [插件架构与实现参考](../../docs/plugin-architecture.md#旧版本数据迁移)。新路径的容器重建场景目前仅通过本地模拟回归，尚未补充真机验证
 - 容器部署应优先把 `IMAGENIA_DATA_DIR` 指向持久化 volume 下的目录
 
 ## 复验清单
