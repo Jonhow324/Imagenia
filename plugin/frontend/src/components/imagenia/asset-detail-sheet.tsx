@@ -53,7 +53,11 @@ export function AssetDetailSheet({
 
         <div className="grid gap-5 p-5">
           <div className="overflow-hidden rounded-xl bg-muted ring-1 ring-foreground/10">
-            <img src={asset.imageUrl} alt={asset.prompt} className="h-auto w-full object-cover" />
+            {asset.imageUnavailable || !asset.imageUrl ? (
+              <div className="grid h-48 place-items-center px-4 text-center text-sm text-muted-foreground">图片暂时无法加载</div>
+            ) : (
+              <img src={asset.imageUrl} alt={asset.prompt} className="h-auto w-full object-cover" />
+            )}
           </div>
 
           <section aria-labelledby="prompt-heading" className="grid gap-2">

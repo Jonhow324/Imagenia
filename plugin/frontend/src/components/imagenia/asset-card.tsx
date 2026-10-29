@@ -29,11 +29,15 @@ export function AssetCard({
       onClick={onOpen}
     >
       <div className="group relative overflow-hidden rounded-t-xl bg-muted">
-        <img
-          src={asset.imageUrl}
-          alt={asset.prompt}
-          className="block h-auto w-full object-cover transition duration-500 group-hover:scale-[1.015]"
-        />
+        {asset.imageUnavailable || !asset.imageUrl ? (
+          <div className="grid h-48 place-items-center px-4 text-center text-sm text-muted-foreground">图片暂时无法加载</div>
+        ) : (
+          <img
+            src={asset.imageUrl}
+            alt={asset.prompt}
+            className="block h-auto w-full object-cover transition duration-500 group-hover:scale-[1.015]"
+          />
+        )}
         <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 bg-gradient-to-b from-black/45 to-transparent p-3">
           <Badge className="border-white/20 bg-black/30 text-white backdrop-blur-sm">
             {asset.kind === "edited" ? <Layers2Icon aria-hidden="true" /> : null}

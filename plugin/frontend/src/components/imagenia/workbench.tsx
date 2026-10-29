@@ -23,7 +23,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { getServices, type CatalogStatus } from "@/services/settings"
-import { deleteAsset as removeAsset, enqueueGeneration, favoriteAsset, getAsset, getJob, listAssetPage, listJobs } from "@/services/generation"
+import { deleteAsset as removeAsset, enqueueGeneration, favoriteAsset, getAsset, getJob, listAssetPage, listJobs, prependLibraryAsset } from "@/services/generation"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Toaster } from "@/components/ui/sonner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -52,6 +52,9 @@ export function ImageniaWorkbench() {
   const [settingsStatus, setSettingsStatus] = React.useState<CatalogStatus | null>(null)
   const [settingsError, setSettingsError] = React.useState("")
   const [settingsLoading, setSettingsLoading] = React.useState(true)
+  const [settingsVersion, setSettingsVersion] = React.useState(0)
+  const [jobsError, setJobsError] = React.useState("")
+  const [jobsVersion, setJobsVersion] = React.useState(0)
   const configured = settingsStatus?.services.some(service => service.enabled && service.configured) ?? false
   const [generationDraft, setGenerationDraft] = React.useState(createGenerationDraft)
   const [retryInput, setRetryInput] = React.useState<GenerateInput | null>(null)
@@ -89,18 +92,26 @@ export function ImageniaWorkbench() {
   const [sourceAsset, setSourceAsset] = React.useState<ImageAsset | null>(null)
   const [sourceLoading, setSourceLoading] = React.useState(false)
   const [highlightedAssetId, setHighlightedAssetId] = React.useState<string | null>(null)
+  const assetsRef = React.useRef(assets)
+  assetsRef.current = assets
+  const publishedRef = React.useRef<ImageAsset[]>([])
+  const libraryViewRef = React.useRef({ favoriteOnly, kindFilter, libraryError })
+  libraryViewRef.current = { favoriteOnly, kindFilter, libraryError }
 
   React.useEffect(() => {
     let active = true
+    setSettingsLoading(true)
     getServices().then((result) => {
-      if (active) setSettingsStatus(result)
+      if (!active) return
+      setSettingsStatus(result)
+      setSettingsError("")
     }).catch((cause: unknown) => {
       if (active) setSettingsError(cause instanceof Error ? cause.message : "无法读取配置。")
     }).finally(() => {
       if (active) setSettingsLoading(false)
     })
     return () => { active = false }
-  }, [])
+  }, [settingsVersion])
 
 
 
@@ -161,13 +172,64 @@ export function ImageniaWorkbench() {
     }
   }
 
+  function revokeUrl(url: string | null | undefined) {
+    if (url) URL.revokeObjectURL(url)
+  }
+
   function replaceAssets(fresh: ImageAsset[]) {
-    const stale = assetUrls.current
-    assetUrls.current = fresh.map((asset) => asset.imageUrl)
-    setAssets(fresh)
+    const filters = { favoriteOnly: libraryViewRef.current.favoriteOnly, kind: libraryViewRef.current.kindFilter }
+    const pending = publishedRef.current.filter((item) => !fresh.some((row) => row.id === item.id))
+    let merged = fresh
+    for (const item of [...pending].reverse()) merged = prependLibraryAsset(merged, item, filters)
+    publishedRef.current = pending.filter((item) => merged.some((row) => row.id === item.id))
+    const live = new Set(merged.flatMap((asset) => asset.imageUrl ? [asset.imageUrl] : []))
+    const stale = assetUrls.current.filter((url) => !live.has(url))
+    assetUrls.current = [...live]
+    setAssets(merged)
     window.setTimeout(() => {
       for (const url of stale) URL.revokeObjectURL(url)
     }, 1000)
+  }
+
+  function highlightAsset(assetId: string) {
+    setHighlightedAssetId(assetId)
+    window.setTimeout(() => setHighlightedAssetId((id) => id === assetId ? null : id), 5000)
+  }
+
+  async function revealFinishedAsset(assetId: string) {
+    if (libraryViewRef.current.libraryError) {
+      refreshAssets()
+      toast.success("图像已完成", { description: "新作品已加入资料库。" })
+      return
+    }
+    let asset: ImageAsset
+    try {
+      asset = await getAsset(assetId)
+    } catch {
+      refreshAssets()
+      toast.success("图像已完成", { description: "新作品已加入资料库。" })
+      return
+    }
+    const filters = { favoriteOnly: libraryViewRef.current.favoriteOnly, kind: libraryViewRef.current.kindFilter }
+    if (prependLibraryAsset([], asset, filters).length === 0) {
+      revokeUrl(asset.imageUrl)
+      toast.success("图像已完成", { description: "新作品已加入资料库。清除筛选后可以查看。" })
+      return
+    }
+    if (assetsRef.current.some((item) => item.id === asset.id)) {
+      revokeUrl(asset.imageUrl)
+      highlightAsset(asset.id)
+      toast.success("图像已完成", { description: "新作品已加入资料库并高亮显示。" })
+      return
+    }
+    publishedRef.current = [asset, ...publishedRef.current.filter((item) => item.id !== asset.id)]
+    if (asset.imageUrl) assetUrls.current.push(asset.imageUrl)
+    setAssets((current) => prependLibraryAsset(current, asset, {
+      favoriteOnly: libraryViewRef.current.favoriteOnly,
+      kind: libraryViewRef.current.kindFilter,
+    }))
+    highlightAsset(asset.id)
+    toast.success("图像已完成", { description: "新作品已加入资料库并高亮显示。" })
   }
 
   function refreshAssets() {
@@ -191,11 +253,15 @@ export function ImageniaWorkbench() {
 
   React.useEffect(() => {
     let active = true
-    listJobs().then((fresh) => { if (active) setJobs(fresh) }).catch((cause: unknown) => {
-      if (active) setSettingsError(cause instanceof Error ? cause.message : "无法读取任务记录。")
+    listJobs().then((fresh) => {
+      if (!active) return
+      setJobs(fresh)
+      setJobsError("")
+    }).catch((cause: unknown) => {
+      if (active) setJobsError(cause instanceof Error ? cause.message : "无法读取任务记录。")
     })
     return () => { active = false }
-  }, [])
+  }, [jobsVersion])
 
   React.useEffect(() => {
     const controller = new AbortController()
@@ -211,7 +277,7 @@ export function ImageniaWorkbench() {
       if (!controller.signal.aborted) {
         replaceAssets(page.items)
         setNextCursor(page.nextCursor)
-      } else for (const asset of page.items) URL.revokeObjectURL(asset.imageUrl)
+      } else for (const asset of page.items) revokeUrl(asset.imageUrl)
     }).catch((cause: unknown) => {
       if (!controller.signal.aborted) setLibraryError(cause instanceof Error ? cause.message : "无法加载图片资料库。")
     }).finally(() => { if (!controller.signal.aborted) setIsLoading(false) })
@@ -239,10 +305,10 @@ export function ImageniaWorkbench() {
       const page = await listAssetPage({ favorite: favoriteOnly, kind: kindFilter,
         cursor: nextCursor, signal: controller.signal })
       if (controller.signal.aborted) {
-        for (const asset of page.items) URL.revokeObjectURL(asset.imageUrl)
+        for (const asset of page.items) revokeUrl(asset.imageUrl)
         return
       }
-      assetUrls.current.push(...page.items.map((asset) => asset.imageUrl))
+      assetUrls.current.push(...page.items.flatMap((asset) => asset.imageUrl ? [asset.imageUrl] : []))
       setAssets((current) => [...current, ...page.items])
       setNextCursor(page.nextCursor)
     } catch {
@@ -293,19 +359,14 @@ export function ImageniaWorkbench() {
       try {
         for (const job of activeJobs) {
           const fresh = await getJob(job.id)
-          if (fresh.status === "succeeded" && fresh.resultAssetId) {
-            refreshAssets()
-            setHighlightedAssetId(fresh.resultAssetId)
-            window.setTimeout(() => setHighlightedAssetId((id) => id === fresh.resultAssetId ? null : id), 5000)
-            toast.success("图像已完成", { description: "新作品已加入资料库并高亮显示。" })
-          } else if (fresh.status === "failed") {
-            toast.error(fresh.errorMessage ?? "生成失败，请稍后重试。")
-          }
+          if (fresh.status === "succeeded" && fresh.resultAssetId) void revealFinishedAsset(fresh.resultAssetId)
+          else if (fresh.status === "failed") toast.error(fresh.errorMessage ?? "生成失败，请稍后重试。")
           setJobs((current) => current.map((item) => item.id === job.id ? fresh : item))
         }
+        setJobsError("")
       } catch (cause) {
-        setSettingsError(cause instanceof Error ? cause.message : "无法读取任务状态。")
-        window.clearInterval(timer)
+        // Keep polling. A dropped status read must not freeze the queue or look like a settings failure.
+        setJobsError(cause instanceof Error ? cause.message : "无法读取任务状态。")
       } finally { polling = false }
     }, 1500)
     return () => window.clearInterval(timer)
@@ -447,6 +508,14 @@ export function ImageniaWorkbench() {
               <Alert variant="destructive" className="shrink-0">
                 <AlertTitle>配置读取失败</AlertTitle>
                 <AlertDescription>{settingsError}</AlertDescription>
+                <Button type="button" variant="outline" className="mt-3" onClick={() => setSettingsVersion((version) => version + 1)}>重试</Button>
+              </Alert>
+            ) : null}
+            {jobsError ? (
+              <Alert variant="destructive" className="shrink-0">
+                <AlertTitle>任务状态暂时无法更新</AlertTitle>
+                <AlertDescription>{jobsError}</AlertDescription>
+                <Button type="button" variant="outline" className="mt-3" onClick={() => setJobsVersion((version) => version + 1)}>重试</Button>
               </Alert>
             ) : null}
             {!settingsLoading && !settingsError && !configured ? (
