@@ -2,28 +2,34 @@
 
 ## Project Structure & Module Organization
 
-This repository is documentation-first. Key paths are:
+The product is the Imagenia QwenPaw plugin in `plugin/`. Research and design notes live under `docs/`. Key paths are:
 
-- `docs/qwenpaw-plugin-development-research.md` — Chinese-language research and implementation guidance for QwenPaw plugins.
+- `plugin/` — backend (`src/imagenia_plugin/`, `plugin.py`, `dev.py`), React workbench (`frontend/`), and tests.
+- `docs/` — architecture, ADRs, and QwenPaw research. `docs/qwenpaw-plugin-development-research.md` is the Chinese-language plugin research note.
 - `.agents/` and `.codex/` — agent configuration directories; treat them as tooling metadata unless a task explicitly targets them.
 
-Add new research notes under `docs/` with kebab-case names (for example, `docs/plugin-security-review.md`). If executable plugin code is introduced, keep each plugin self-contained in a named directory with its own `plugin.json`, backend entry point, dependencies, README, and tests.
+Add new research notes under `docs/` with kebab-case names (for example, `docs/plugin-security-review.md`). Keep plugin code self-contained under `plugin/` with `plugin.json`, backend entry point, dependencies, README, and tests.
 
 ## Build, Test, and Development Commands
 
-There is no repository-wide build system or automated test suite yet. Use lightweight checks for documentation changes:
+Canonical install, launch, and test commands are in `plugin/README.md`. From the repository root:
 
 ```bash
-sed -n '1,120p' docs/qwenpaw-plugin-development-research.md
+python3 -m venv .venv
+.venv/bin/python -m pip install -r plugin/requirements-dev.txt
+npm ci --prefix plugin/frontend
+.venv/bin/python -m pytest plugin/tests -q
+npm run build --prefix plugin/frontend
 ```
 
-Reviews the rendered source structure and opening content.
+Local development uses two processes. The default backend is offline fake mode (no API key and no external image calls):
 
 ```bash
-grep -n '^#' docs/*.md
+.venv/bin/python plugin/dev.py
+npm run dev --prefix plugin/frontend
 ```
 
-Checks heading order across Markdown files. If available locally, run `markdownlint "**/*.md"` before submitting. For future QwenPaw plugin code, document exact install, launch, and test commands in the plugin's README rather than assuming global tooling.
+The API listens on `http://127.0.0.1:8765` and the workbench on `http://127.0.0.1:5173`, which proxies `/api/imagenia`. For documentation-only edits, check heading order with `grep -n '^#' docs/*.md`.
 
 ## Coding Style & Naming Conventions
 
@@ -35,7 +41,7 @@ Documentation changes must be checked for accurate commands, valid JSON/Python e
 
 ## Commit & Pull Request Guidelines
 
-No usable Git history is present in this checkout, so follow Conventional Commits: `docs: clarify version compatibility` or `feat: add hello tool example`. Keep commits focused. Pull requests should summarize the change, identify affected documents or plugins, list validation performed, and link related issues or source material. Include screenshots only for rendered UI or formatting changes when visual review helps.
+Follow Conventional Commits: `docs: clarify version compatibility` or `feat: add hello tool example`. Keep commits focused. Pull requests should summarize the change, identify affected documents or plugins, list validation performed, and link related issues or source material. Include screenshots only for rendered UI or formatting changes when visual review helps.
 
 ## Security & Configuration Tips
 
@@ -54,3 +60,11 @@ This repository uses the default triage labels: `needs-triage`, `needs-info`, `r
 ### Domain docs
 
 This is a single-context repository. Read `CONTEXT.md` and relevant ADRs under `docs/adr/` before exploring or modifying the codebase. See `docs/agents/domain.md`.
+
+## Cursor Cloud specific instructions
+
+- Python 3.12 and Node.js 22 are required. Frontend tests pass `--experimental-strip-types` to Node, so do not switch to an older Node.
+- The default image does not include `python3.12-venv`. Install that package before `python3 -m venv .venv`.
+- Cloud Agent startup launches the offline fake backend and Vite in tmux sessions `imagenia-api` and `imagenia-web`. Reuse those sessions. Do not start `--provider openai`; that mode calls a paid image API.
+- Fake mode seeds `plugin/.local-data/fake/` on the first empty start and does not reseed after jobs exist. Use `--seed 0 --data-dir` on a fresh directory to exercise an empty library.
+- The workbench copy is Chinese. A representative check is to open `http://127.0.0.1:5173`, submit a prompt of at least 8 characters with 「开始生成」, and confirm the new image appears in the library.
