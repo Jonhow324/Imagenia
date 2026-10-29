@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { getAsset, listAssetPage } from "../src/services/generation.ts"
+import { getAsset, listAssetPage, prependLibraryAsset } from "../src/services/generation.ts"
 
 const resource = (id, kind = "generated") => ({ id, kind, prompt: "view", model: "model",
   size: "square", width: 1024, height: 1024, created_at: "2026-09-24", is_favorite: true,
@@ -49,6 +49,34 @@ test("mixed PNG and JPEG assets load without rejecting the page", async () => {
   assert.deepEqual(page.items.map((asset) => asset.id), ["png", "jpeg"])
   assert.deepEqual(page.items.map((asset) => asset.imageUrl), ["blob:asset-1", "blob:asset-2"])
   assert.deepEqual(revoked, [])
+})
+
+test("one unavailable image stays on the page so the rest remain visible", async () => {
+  const { revoked } = fixture()
+  globalThis.fetch = async (url) => {
+    if (url.endsWith("/assets")) return Response.json({ items: [resource("good"), resource("bad")], next_cursor: "next" })
+    if (url.endsWith("/good/content")) return new Response(new Blob(["png"]), { headers: { "content-type": "image/png" } })
+    if (url.endsWith("/bad/content")) return new Response("missing", { status: 404, headers: { "content-type": "application/json" } })
+    throw Error("unexpected URL")
+  }
+  const page = await listAssetPage()
+  assert.deepEqual(page.items.map((asset) => asset.id), ["good", "bad"])
+  assert.equal(page.items[0].imageUrl, "blob:asset-1")
+  assert.equal(page.items[0].imageUnavailable, undefined)
+  assert.equal(page.items[1].imageUnavailable, true)
+  assert.equal(page.items[1].imageUrl, "")
+  assert.equal(page.nextCursor, "next")
+  assert.deepEqual(revoked, [])
+})
+
+test("a finished asset is prepended only when the current filters include it", () => {
+  const finished = { id: "new", kind: "generated", prompt: "new", model: "model", size: "square",
+    dimensions: "1024 × 1024", createdAt: "2026-10-29", isFavorite: false, imageUrl: "blob:new", accent: "#64748b" }
+  const older = { ...finished, id: "old", imageUrl: "blob:old" }
+  assert.equal(prependLibraryAsset([older], finished, { favoriteOnly: false, kind: "all" })[0], finished)
+  assert.deepEqual(prependLibraryAsset([older], finished, { favoriteOnly: true, kind: "all" }), [older])
+  assert.deepEqual(prependLibraryAsset([older], finished, { favoriteOnly: false, kind: "edited" }), [older])
+  assert.equal(prependLibraryAsset([finished], { ...finished, imageUrl: "blob:dup" }, { favoriteOnly: false, kind: "all" })[0].imageUrl, "blob:new")
 })
 
 test("partial page failure revokes every created object URL and preserves safe 401", async () => {

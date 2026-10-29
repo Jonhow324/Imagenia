@@ -73,15 +73,33 @@ export interface AssetFilters {
   signal?: AbortSignal
 }
 
-function mapAsset(asset: AssetResource, url: string): ImageAsset {
+function mapAsset(asset: AssetResource, url: string, imageUnavailable = false): ImageAsset {
   return { id: asset.id, kind: asset.kind, prompt: asset.prompt, model: asset.model,
     serviceId: asset.service_id, serviceName: asset.service_name, modelId: asset.model_id,
     size: asset.size, dimensions: `${asset.width} × ${asset.height}`,
     createdAt: asset.created_at, isFavorite: asset.is_favorite,
-    sourceAssetId: asset.source_asset_id ?? undefined, imageUrl: url, accent: "#64748b" }
+    sourceAssetId: asset.source_asset_id ?? undefined, imageUrl: url, accent: "#64748b",
+    ...(imageUnavailable ? { imageUnavailable: true } : {}) }
 }
 
-/** A failed page never leaks URLs that finished loading before the failure. */
+/** Keep a newly finished asset at the top when it belongs in the current library view. */
+export function prependLibraryAsset(current: ImageAsset[], asset: ImageAsset,
+  filters: { favoriteOnly: boolean; kind: "all" | ImageAsset["kind"] }): ImageAsset[] {
+  if (current.some((item) => item.id === asset.id)) return current
+  if (filters.favoriteOnly && !asset.isFavorite) return current
+  if (filters.kind !== "all" && asset.kind !== filters.kind) return current
+  return [asset, ...current]
+}
+
+function revokeLoaded(loaded: PromiseSettledResult<ImageAsset>[]) {
+  for (const result of loaded) {
+    if (result.status === "fulfilled" && result.value.imageUrl.startsWith("blob:")) {
+      URL.revokeObjectURL(result.value.imageUrl)
+    }
+  }
+}
+
+/** A page-level failure never leaks URLs that finished loading. One unreadable image stays as a card. */
 export async function listAssetPage(filters: AssetFilters = {}): Promise<AssetPage> {
   const params = new URLSearchParams()
   if (filters.favorite) params.set("favorite", "true")
@@ -89,11 +107,17 @@ export async function listAssetPage(filters: AssetFilters = {}): Promise<AssetPa
   if (filters.cursor) params.set("cursor", filters.cursor)
   const path = `/assets${params.size ? `?${params}` : ""}`
   const data = await request<{ items: AssetResource[]; next_cursor: string | null }>(path, { signal: filters.signal })
-  const loaded = await Promise.allSettled(data.items.map(async (asset) =>
-    mapAsset(asset, await imageUrl(asset.id, filters.signal))))
+  const loaded = await Promise.allSettled(data.items.map(async (asset) => {
+    try {
+      return mapAsset(asset, await imageUrl(asset.id, filters.signal))
+    } catch (error) {
+      if (error instanceof SettingsRequestError && error.code === "image_unavailable") return mapAsset(asset, "", true)
+      throw error
+    }
+  }))
   const failed = loaded.find((result) => result.status === "rejected")
   if (failed || filters.signal?.aborted) {
-    for (const result of loaded) if (result.status === "fulfilled") URL.revokeObjectURL(result.value.imageUrl)
+    revokeLoaded(loaded)
     throw failed && failed.status === "rejected" ? failed.reason : new SettingsRequestError("cancelled", "图片加载已取消。")
   }
   return { items: loaded.map((result) => (result as PromiseFulfilledResult<ImageAsset>).value),

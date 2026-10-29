@@ -17,6 +17,7 @@ export interface ImageAsset {
   isFavorite: boolean
   sourceAssetId?: string
   imageUrl: string
+  imageUnavailable?: boolean
   accent: string
 }
 
