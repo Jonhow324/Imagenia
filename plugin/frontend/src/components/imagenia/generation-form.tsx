@@ -82,10 +82,13 @@ export function GenerationForm({
   }
 
   React.useEffect(() => {
-    if (draft.sourceAssetId === editingAsset?.id) return
-    onDraftChange(value => ({ ...value, sourceAssetId: editingAsset?.id,
-      prompt: editingAsset ? `以这张图片为基础，${editingAsset.prompt}` : "",
-      size: editingAsset?.size ?? "square", quality: "standard" }))
+    if (!editingAsset || draft.sourceAssetId === editingAsset.id) return
+    const model = selectedServiceModel(catalog, selection, true).model
+    const preferredQuality = editingAsset.quality ?? "standard"
+    onDraftChange(value => ({ ...value, sourceAssetId: editingAsset.id,
+      prompt: `以这张图片为基础，${editingAsset.prompt}`,
+      size: model?.sizes.includes(editingAsset.size) ? editingAsset.size : model?.sizes[0] ?? editingAsset.size,
+      quality: model?.qualities.includes(preferredQuality) ? preferredQuality : model?.qualities[0] ?? "standard" }))
     setError("")
   }, [editingAsset])
 
@@ -107,6 +110,10 @@ export function GenerationForm({
     const normalized = prompt.trim()
     if (normalized.length < 8) {
       setError("请至少输入 8 个字符，让画面意图更清楚。")
+      return
+    }
+    if (normalized.length > 4000) {
+      setError("提示词不能超过 4000 个字符。")
       return
     }
     setError("")
@@ -191,8 +198,17 @@ export function GenerationForm({
                 onChange={(event) => setPrompt(event.target.value)}
                 placeholder="例如：雨后的上海弄堂，暖色窗光，电影感，35mm 胶片质感……"
                 className="min-h-16 flex-1 resize-none"
+                onKeyDown={(event) => {
+                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                    event.preventDefault()
+                    event.currentTarget.form?.requestSubmit()
+                  }
+                }}
               />
-              <FieldDescription className="m-0 text-xs">提示词保存在本机，不写入运行日志。</FieldDescription>
+              <div className="flex items-start justify-between gap-3">
+                <FieldDescription className="m-0 text-xs">提示词保存在本机，不写入运行日志。Ctrl 或 ⌘ 与 Enter 可提交。</FieldDescription>
+                <span className={`shrink-0 text-xs tabular-nums ${prompt.length > 4000 ? "text-destructive" : "text-muted-foreground"}`}>{prompt.length}/4000</span>
+              </div>
               {error ? <FieldError>{error}</FieldError> : null}
             </Field>
 

@@ -9,9 +9,9 @@ import { Spinner } from "@/components/ui/spinner"
 import type { GenerationJob, JobStatus } from "@/mocks/imagenia-service"
 
 const statusMeta: Record<JobStatus, { label: string; icon: typeof Clock3Icon; className: string }> = {
-  pending: { label: "排队中", icon: Clock3Icon, className: "border-amber-500/30 bg-amber-500/10 text-amber-800" },
-  running: { label: "生成中", icon: LoaderCircleIcon, className: "border-blue-500/30 bg-blue-500/10 text-blue-800" },
-  succeeded: { label: "已完成", icon: CircleCheckIcon, className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-800" },
+  pending: { label: "排队中", icon: Clock3Icon, className: "border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200" },
+  running: { label: "生成中", icon: LoaderCircleIcon, className: "border-blue-500/30 bg-blue-500/10 text-blue-800 dark:text-blue-200" },
+  succeeded: { label: "已完成", icon: CircleCheckIcon, className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200" },
   failed: { label: "失败", icon: CircleXIcon, className: "border-destructive/30 bg-destructive/10 text-destructive" },
 }
 

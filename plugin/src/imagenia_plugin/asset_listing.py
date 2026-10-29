@@ -31,6 +31,18 @@ def _decode_cursor(value: str) -> tuple[str, str]:
         raise ValueError("invalid cursor") from None
 
 
+def _prompt_search(raw: str) -> str | None:
+    if any(ord(char) < 32 or ord(char) == 127 for char in raw):
+        raise ValueError("invalid filters")
+    term = raw.strip()
+    if not term:
+        return None
+    if len(term) > 80:
+        raise ValueError("invalid filters")
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def list_asset_rows(database: sqlite3.Connection, query: bytes) -> tuple[list[sqlite3.Row], str | None]:
     if len(query) > 1024:
         raise ValueError("invalid filters")
@@ -38,7 +50,7 @@ def list_asset_rows(database: sqlite3.Connection, query: bytes) -> tuple[list[sq
         params = parse_qs(query.decode("ascii"), keep_blank_values=True, strict_parsing=True)
     except (UnicodeDecodeError, ValueError):
         raise ValueError("invalid filters") from None
-    if any(name not in {"cursor", "favorite", "kind", "limit"} or len(values) != 1 for name, values in params.items()):
+    if any(name not in {"cursor", "favorite", "kind", "limit", "q"} or len(values) != 1 for name, values in params.items()):
         raise ValueError("invalid filters")
     favorite = params.get("favorite", ["false"])[0]
     kind = params.get("kind", ["all"])[0]
@@ -48,6 +60,7 @@ def list_asset_rows(database: sqlite3.Connection, query: bytes) -> tuple[list[sq
     if not re.fullmatch(r"[0-9]+", raw_limit) or not 1 <= int(raw_limit) <= MAX_PAGE_SIZE:
         raise ValueError("invalid filters")
     limit = int(raw_limit)
+    search = _prompt_search(params.get("q", [""])[0])
     conditions = []
     values: list[str | int] = []
     if favorite == "true":
@@ -55,6 +68,10 @@ def list_asset_rows(database: sqlite3.Connection, query: bytes) -> tuple[list[sq
     if kind != "all":
         conditions.append("kind = ?")
         values.append(kind)
+    if search is not None:
+        # Literal substring. LIKE wildcards are escaped; ASCII case follows SQLite NOCASE.
+        conditions.append("prompt LIKE ? ESCAPE '\\'")
+        values.append(search)
     if params.get("cursor", [""])[0] not in {"", "null"}:
         created_at, asset_id = _decode_cursor(params["cursor"][0])
         conditions.append("(created_at, id) < (?, ?)")

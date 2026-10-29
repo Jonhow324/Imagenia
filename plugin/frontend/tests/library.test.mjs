@@ -77,6 +77,23 @@ test("a finished asset is prepended only when the current filters include it", (
   assert.deepEqual(prependLibraryAsset([older], finished, { favoriteOnly: true, kind: "all" }), [older])
   assert.deepEqual(prependLibraryAsset([older], finished, { favoriteOnly: false, kind: "edited" }), [older])
   assert.equal(prependLibraryAsset([finished], { ...finished, imageUrl: "blob:dup" }, { favoriteOnly: false, kind: "all" })[0].imageUrl, "blob:new")
+  assert.deepEqual(prependLibraryAsset([older], finished, { favoriteOnly: false, kind: "all", query: "%" }), [older])
+  assert.equal(prependLibraryAsset([older], { ...finished, prompt: "Rainy alley" }, { favoriteOnly: false, kind: "all", query: "RAINY" })[0].prompt, "Rainy alley")
+  assert.equal(prependLibraryAsset([older], { ...finished, prompt: "100% silk" }, { favoriteOnly: false, kind: "all", query: "%" })[0].prompt, "100% silk")
+})
+
+test("prompt search is sent as a literal q parameter", async () => {
+  const { calls } = fixture()
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init })
+    if (url.includes("?")) return Response.json({ items: [], next_cursor: null })
+    throw Error("unexpected URL")
+  }
+  const page = await listAssetPage({ query: "  雨后 弄堂  " })
+  assert.deepEqual(page.items, [])
+  const params = new URLSearchParams()
+  params.set("q", "雨后 弄堂")
+  assert.equal(calls[0].url, `/api/imagenia/assets?${params}`)
 })
 
 test("partial page failure revokes every created object URL and preserves safe 401", async () => {

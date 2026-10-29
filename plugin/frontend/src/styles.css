@@ -31,7 +31,8 @@
   font-synthesis: none;
 }
 
-.imagenia-root.dark {
+.imagenia-root.dark,
+.imagenia-root.dark .imagenia-root {
   --background: 224 22% 10%;
   --foreground: 220 14% 96%;
   --card: 224 18% 13%;

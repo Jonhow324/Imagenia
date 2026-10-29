@@ -11,11 +11,13 @@ import { EmptyLibrary } from "@/components/imagenia/empty-library"
 export function AssetWaterfall({
   assets,
   filtered,
+  searching,
   highlightedAssetId,
   isLoading,
   isLoadingMore,
   hasMore,
   loadMoreError,
+  scrollRootRef,
   onLoadMore,
   onResetFilters,
   onOpen,
@@ -23,16 +25,32 @@ export function AssetWaterfall({
 }: {
   assets: ImageAsset[]
   filtered: boolean
+  searching: boolean
   highlightedAssetId: string | null
   isLoading: boolean
   isLoadingMore: boolean
   hasMore: boolean
   loadMoreError: boolean
+  scrollRootRef: React.RefObject<HTMLDivElement | null>
   onLoadMore: () => void
   onResetFilters: () => void
   onOpen: (asset: ImageAsset) => void
   onToggleFavorite: (asset: ImageAsset) => void
 }) {
+  const sentinel = React.useRef<HTMLDivElement | null>(null)
+  const loadMoreRef = React.useRef(onLoadMore)
+  loadMoreRef.current = onLoadMore
+
+  React.useEffect(() => {
+    const node = sentinel.current
+    const root = scrollRootRef.current
+    if (!node || !root || !hasMore || isLoading || isLoadingMore || loadMoreError) return
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) loadMoreRef.current()
+    }, { root, rootMargin: "200px" })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [hasMore, isLoading, isLoadingMore, loadMoreError, scrollRootRef])
   if (isLoading) {
     return (
       <div className="columns-1 gap-4 sm:columns-2 xl:columns-3" aria-label="正在加载图片">
@@ -48,7 +66,7 @@ export function AssetWaterfall({
   }
 
   if (assets.length === 0 && !hasMore) {
-    return <EmptyLibrary filtered={filtered} onReset={onResetFilters} />
+    return <EmptyLibrary filtered={filtered} searching={searching} onReset={onResetFilters} />
   }
 
   return (
@@ -72,7 +90,8 @@ export function AssetWaterfall({
         </Alert>
       ) : null}
       {hasMore ? (
-        <div className="mt-5 flex justify-center">
+        <div className="mt-5 flex flex-col items-center">
+          <div ref={sentinel} className="h-px w-full" aria-hidden="true" />
           <Button variant="outline" onClick={onLoadMore} disabled={isLoadingMore}>
             {isLoadingMore ? "正在加载…" : loadMoreError ? "重新加载" : "加载更多"}
             {isLoadingMore ? <Loader2Icon className="animate-spin opacity-60" aria-hidden="true" /> : null}

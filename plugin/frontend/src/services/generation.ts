@@ -26,6 +26,7 @@ interface AssetResource {
   prompt: string
   model: string
   size: ImageAsset["size"]
+  quality?: ImageAsset["quality"]
   width: number
   height: number
   created_at: string
@@ -69,6 +70,7 @@ export interface AssetPage {
 export interface AssetFilters {
   favorite?: boolean
   kind?: "all" | ImageAsset["kind"]
+  query?: string
   cursor?: string | null
   signal?: AbortSignal
 }
@@ -76,18 +78,28 @@ export interface AssetFilters {
 function mapAsset(asset: AssetResource, url: string, imageUnavailable = false): ImageAsset {
   return { id: asset.id, kind: asset.kind, prompt: asset.prompt, model: asset.model,
     serviceId: asset.service_id, serviceName: asset.service_name, modelId: asset.model_id,
-    size: asset.size, dimensions: `${asset.width} × ${asset.height}`,
+    size: asset.size, quality: asset.quality === "high" || asset.quality === "standard" ? asset.quality : undefined,
+    dimensions: `${asset.width} × ${asset.height}`,
     createdAt: asset.created_at, isFavorite: asset.is_favorite,
     sourceAssetId: asset.source_asset_id ?? undefined, imageUrl: url, accent: "#64748b",
     ...(imageUnavailable ? { imageUnavailable: true } : {}) }
 }
 
+/** ASCII-only case fold, matching SQLite LIKE without treating % or _ as wildcards. */
+export function promptMatchesQuery(prompt: string, query: string | undefined): boolean {
+  const term = query?.trim() ?? ""
+  if (!term) return true
+  const fold = (value: string) => value.replace(/[A-Za-z]/g, (letter) => letter.toLowerCase())
+  return fold(prompt).includes(fold(term))
+}
+
 /** Keep a newly finished asset at the top when it belongs in the current library view. */
 export function prependLibraryAsset(current: ImageAsset[], asset: ImageAsset,
-  filters: { favoriteOnly: boolean; kind: "all" | ImageAsset["kind"] }): ImageAsset[] {
+  filters: { favoriteOnly: boolean; kind: "all" | ImageAsset["kind"]; query?: string }): ImageAsset[] {
   if (current.some((item) => item.id === asset.id)) return current
   if (filters.favoriteOnly && !asset.isFavorite) return current
   if (filters.kind !== "all" && asset.kind !== filters.kind) return current
+  if (!promptMatchesQuery(asset.prompt, filters.query)) return current
   return [asset, ...current]
 }
 
@@ -104,6 +116,7 @@ export async function listAssetPage(filters: AssetFilters = {}): Promise<AssetPa
   const params = new URLSearchParams()
   if (filters.favorite) params.set("favorite", "true")
   if (filters.kind && filters.kind !== "all") params.set("kind", filters.kind)
+  if (filters.query?.trim()) params.set("q", filters.query.trim())
   if (filters.cursor) params.set("cursor", filters.cursor)
   const path = `/assets${params.size ? `?${params}` : ""}`
   const data = await request<{ items: AssetResource[]; next_cursor: string | null }>(path, { signal: filters.signal })

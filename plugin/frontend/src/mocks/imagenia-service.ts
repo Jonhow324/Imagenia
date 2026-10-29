@@ -12,6 +12,7 @@ export interface ImageAsset {
   prompt: string
   model: string
   size: ImageSize
+  quality?: ImageQuality
   dimensions: string
   createdAt: string
   isFavorite: boolean
