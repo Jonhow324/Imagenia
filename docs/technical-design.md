@@ -108,7 +108,7 @@ finished_at        可空时间
 POST  /api/imagenia/jobs/generate
 POST  /api/imagenia/jobs/edit
 GET   /api/imagenia/jobs/{job_id}
-GET   /api/imagenia/assets?limit=30&cursor=...&favorite=true&kind=edited
+GET   /api/imagenia/assets?limit=30&cursor=...&favorite=true&kind=edited&q=keyword
 GET   /api/imagenia/assets/{asset_id}
 GET   /api/imagenia/assets/{asset_id}/content
 PATCH /api/imagenia/assets/{asset_id}
@@ -130,7 +130,7 @@ POST  /api/imagenia/services/{service_id}/test
 {"job_id":"uuid","status":"pending"}
 ```
 
-列表使用 `created_at DESC, id DESC` 的不透明游标，每页默认 30 条。收藏通过 PATCH 更新 `is_favorite`。删除会移除文件和资产，解除后代来源引用，并保留脱敏的最小任务记录。
+列表使用 `created_at DESC, id DESC` 的不透明游标，每页默认 30 条。`q` 是最长 80 个字符的提示词字面子串，可与收藏和类型组合。收藏通过 PATCH 更新 `is_favorite`。删除会移除文件和资产，解除后代来源引用，并保留脱敏的最小任务记录。
 
 ## 4. Worker 生命周期
 

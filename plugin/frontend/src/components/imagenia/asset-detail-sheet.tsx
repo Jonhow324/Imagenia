@@ -1,9 +1,11 @@
 import * as React from "react"
-import { CalendarIcon, ImageIcon, PencilLineIcon, ShapesIcon } from "lucide-react"
+import { CalendarIcon, CopyIcon, DownloadIcon, ImageIcon, PencilLineIcon, ShapesIcon, SparklesIcon } from "lucide-react"
+import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   Sheet,
   SheetContent,
@@ -26,6 +28,7 @@ export function AssetDetailSheet({
   onDelete,
   onToggleFavorite,
   onOpenSource,
+  onReusePrompt,
 }: {
   asset: ImageAsset | null
   open: boolean
@@ -36,6 +39,7 @@ export function AssetDetailSheet({
   onDelete: (asset: ImageAsset) => void
   onToggleFavorite: (asset: ImageAsset) => void
   onOpenSource: (asset: ImageAsset) => void
+  onReusePrompt: (asset: ImageAsset) => void
 }) {
   if (!asset) return null
 
@@ -61,7 +65,27 @@ export function AssetDetailSheet({
           </div>
 
           <section aria-labelledby="prompt-heading" className="grid gap-2">
-            <h3 id="prompt-heading" className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">提示词</h3>
+            <div className="flex items-center justify-between gap-2">
+              <h3 id="prompt-heading" className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">提示词</h3>
+              <div className="flex items-center gap-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button type="button" variant="ghost" size="icon-sm" aria-label="复制提示词" onClick={() => void copyPrompt(asset.prompt)}>
+                      <CopyIcon aria-hidden="true" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>复制提示词</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button type="button" variant="ghost" size="icon-sm" aria-label="下载原图" disabled={!asset.imageUrl} onClick={() => void downloadImage(asset)}>
+                      <DownloadIcon aria-hidden="true" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>下载原图</TooltipContent>
+                </Tooltip>
+              </div>
+            </div>
             <p className="text-sm leading-6">{asset.prompt}</p>
           </section>
 
@@ -71,6 +95,7 @@ export function AssetDetailSheet({
             <Meta icon={ShapesIcon} label="图像服务" value={asset.serviceName ?? "历史配置"} />
             <Meta icon={ShapesIcon} label="模型" value={asset.model} />
             <Meta icon={ImageIcon} label="画幅" value={`${sizeLabel(asset.size)} · ${asset.dimensions}`} />
+            {asset.quality ? <Meta icon={SparklesIcon} label="质量" value={asset.quality === "high" ? "高质量" : "标准"} /> : null}
             <Meta icon={CalendarIcon} label="创建时间" value={formatDateTime(asset.createdAt)} />
             <Meta icon={PencilLineIcon} label="类型" value={asset.kind === "edited" ? "基于图片编辑" : "文本生成"} />
           </dl>
@@ -90,8 +115,12 @@ export function AssetDetailSheet({
           ) : null}
         </div>
 
-        <SheetFooter className="sticky bottom-0 flex-row border-t bg-background/95 p-4 backdrop-blur">
+        <SheetFooter className="sticky bottom-0 flex-row flex-wrap items-center gap-2 border-t bg-background/95 p-4 backdrop-blur">
           <FavoriteButton active={asset.isFavorite} onToggle={() => onToggleFavorite(asset)} className="mr-auto" />
+          <Button type="button" variant="outline" size="sm" onClick={() => onReusePrompt(asset)}>
+            <SparklesIcon aria-hidden="true" />
+            用此提示词
+          </Button>
           <DeleteAssetDialog assetLabel={asset.prompt} onConfirm={() => onDelete(asset)} />
           <Button onClick={() => onEdit(asset)}>
             <PencilLineIcon aria-hidden="true" />
@@ -111,6 +140,37 @@ function Meta({ icon: Icon, label, value }: { icon: typeof CalendarIcon; label: 
       <dd className="col-start-2 text-sm font-medium">{value}</dd>
     </div>
   )
+}
+
+async function copyPrompt(prompt: string) {
+  try {
+    await navigator.clipboard.writeText(prompt)
+    toast.success("提示词已复制")
+  } catch {
+    toast.error("无法写入剪贴板，请手动选择提示词。")
+  }
+}
+
+async function downloadImage(asset: ImageAsset) {
+  if (!asset.imageUrl) {
+    toast.error("图片暂时无法下载。")
+    return
+  }
+  try {
+    const blob = await fetch(asset.imageUrl).then((response) => response.blob())
+    const extension = blob.type === "image/jpeg" ? "jpg" : blob.type === "image/webp" ? "webp" : "png"
+    const slug = asset.prompt.trim().slice(0, 32).replace(/[\\/:*?"<>|\s]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "image"
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.download = `imagenia-${slug}.${extension}`
+    document.body.append(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  } catch {
+    toast.error("图片暂时无法下载。")
+  }
 }
 
 function sizeLabel(size: ImageAsset["size"]) {

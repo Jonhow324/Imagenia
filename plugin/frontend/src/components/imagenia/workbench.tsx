@@ -3,9 +3,13 @@ import {
   HeartIcon,
   ImagesIcon,
   ListTodoIcon,
+  MoonIcon,
   PlusIcon,
+  SearchIcon,
   Settings2Icon,
   SlidersHorizontalIcon,
+  SunIcon,
+  XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -18,16 +22,18 @@ import { SettingsSheet } from "@/components/imagenia/settings-sheet"
 import { GenerationForm, createGenerationDraft } from "@/components/imagenia/generation-form"
 import { GenerationJobCard } from "@/components/imagenia/generation-job-card"
 import { PortalContainerProvider } from "@/components/imagenia/portal-root"
+import { persistTheme, readStoredTheme, WorkbenchThemeProvider, type WorkbenchTheme } from "@/components/imagenia/theme"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { getServices, type CatalogStatus } from "@/services/settings"
 import { deleteAsset as removeAsset, enqueueGeneration, favoriteAsset, getAsset, getJob, listAssetPage, listJobs, prependLibraryAsset } from "@/services/generation"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Toaster } from "@/components/ui/sonner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { TooltipProvider } from "@/components/ui/tooltip"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   type AssetKind,
   type GenerateInput,
@@ -49,6 +55,9 @@ export function ImageniaWorkbench() {
   const [favoriteOnly, setFavoriteOnly] = React.useState(false)
   const mutations = React.useRef(new Set<string>())
   const [kindFilter, setKindFilter] = React.useState<KindFilter>("all")
+  const [queryInput, setQueryInput] = React.useState("")
+  const [query, setQuery] = React.useState("")
+  const [theme, setTheme] = React.useState<WorkbenchTheme>(readStoredTheme)
   const [settingsStatus, setSettingsStatus] = React.useState<CatalogStatus | null>(null)
   const [settingsError, setSettingsError] = React.useState("")
   const [settingsLoading, setSettingsLoading] = React.useState(true)
@@ -95,8 +104,8 @@ export function ImageniaWorkbench() {
   const assetsRef = React.useRef(assets)
   assetsRef.current = assets
   const publishedRef = React.useRef<ImageAsset[]>([])
-  const libraryViewRef = React.useRef({ favoriteOnly, kindFilter, libraryError })
-  libraryViewRef.current = { favoriteOnly, kindFilter, libraryError }
+  const libraryViewRef = React.useRef({ favoriteOnly, kindFilter, libraryError, query })
+  libraryViewRef.current = { favoriteOnly, kindFilter, libraryError, query }
 
   React.useEffect(() => {
     let active = true
@@ -117,7 +126,17 @@ export function ImageniaWorkbench() {
 
   const selectedAsset = assets.find((asset) => asset.id === selectedAssetId)
     ?? (extraDetail?.id === selectedAssetId ? extraDetail : null)
-  const filtersActive = favoriteOnly || kindFilter !== "all"
+  const filtersActive = favoriteOnly || kindFilter !== "all" || query.length > 0
+  const listKey = `${favoriteOnly}\n${kindFilter}\n${query}\n${reloadVersion}`
+  const [appliedListKey, setAppliedListKey] = React.useState(listKey)
+  if (listKey !== appliedListKey) {
+    setAppliedListKey(listKey)
+    setIsLoading(true)
+    setIsLoadingMore(false)
+    setLoadMoreError(false)
+    setLibraryError("")
+    setNextCursor(null)
+  }
 
   React.useEffect(() => {
     const sourceId = selectedAsset?.sourceAssetId
@@ -176,8 +195,16 @@ export function ImageniaWorkbench() {
     if (url) URL.revokeObjectURL(url)
   }
 
+  function viewFilters() {
+    return {
+      favoriteOnly: libraryViewRef.current.favoriteOnly,
+      kind: libraryViewRef.current.kindFilter,
+      query: libraryViewRef.current.query,
+    }
+  }
+
   function replaceAssets(fresh: ImageAsset[]) {
-    const filters = { favoriteOnly: libraryViewRef.current.favoriteOnly, kind: libraryViewRef.current.kindFilter }
+    const filters = viewFilters()
     const pending = publishedRef.current.filter((item) => !fresh.some((row) => row.id === item.id))
     let merged = fresh
     for (const item of [...pending].reverse()) merged = prependLibraryAsset(merged, item, filters)
@@ -210,10 +237,11 @@ export function ImageniaWorkbench() {
       toast.success("图像已完成", { description: "新作品已加入资料库。" })
       return
     }
-    const filters = { favoriteOnly: libraryViewRef.current.favoriteOnly, kind: libraryViewRef.current.kindFilter }
+    const filters = viewFilters()
     if (prependLibraryAsset([], asset, filters).length === 0) {
       revokeUrl(asset.imageUrl)
-      toast.success("图像已完成", { description: "新作品已加入资料库。清除筛选后可以查看。" })
+      const hiddenBy = libraryViewRef.current.query ? "清除搜索或筛选后可以查看。" : "清除筛选后可以查看。"
+      toast.success("图像已完成", { description: `新作品已加入资料库。${hiddenBy}` })
       return
     }
     if (assetsRef.current.some((item) => item.id === asset.id)) {
@@ -224,10 +252,7 @@ export function ImageniaWorkbench() {
     }
     publishedRef.current = [asset, ...publishedRef.current.filter((item) => item.id !== asset.id)]
     if (asset.imageUrl) assetUrls.current.push(asset.imageUrl)
-    setAssets((current) => prependLibraryAsset(current, asset, {
-      favoriteOnly: libraryViewRef.current.favoriteOnly,
-      kind: libraryViewRef.current.kindFilter,
-    }))
+    setAssets((current) => prependLibraryAsset(current, asset, viewFilters()))
     highlightAsset(asset.id)
     toast.success("图像已完成", { description: "新作品已加入资料库并高亮显示。" })
   }
@@ -273,7 +298,7 @@ export function ImageniaWorkbench() {
     setNextCursor(null)
     if (libraryScroll.current) libraryScroll.current.scrollTop = 0
     closeDetail()
-    listAssetPage({ favorite: favoriteOnly, kind: kindFilter, signal: controller.signal }).then((page) => {
+    listAssetPage({ favorite: favoriteOnly, kind: kindFilter, query, signal: controller.signal }).then((page) => {
       if (!controller.signal.aborted) {
         replaceAssets(page.items)
         setNextCursor(page.nextCursor)
@@ -282,7 +307,7 @@ export function ImageniaWorkbench() {
       if (!controller.signal.aborted) setLibraryError(cause instanceof Error ? cause.message : "无法加载图片资料库。")
     }).finally(() => { if (!controller.signal.aborted) setIsLoading(false) })
     return () => controller.abort()
-  }, [favoriteOnly, kindFilter, reloadVersion])
+  }, [favoriteOnly, kindFilter, query, reloadVersion])
 
   React.useEffect(() => () => {
     pageController.current?.abort()
@@ -302,7 +327,7 @@ export function ImageniaWorkbench() {
     setIsLoadingMore(true)
     setLoadMoreError(false)
     try {
-      const page = await listAssetPage({ favorite: favoriteOnly, kind: kindFilter,
+      const page = await listAssetPage({ favorite: favoriteOnly, kind: kindFilter, query,
         cursor: nextCursor, signal: controller.signal })
       if (controller.signal.aborted) {
         for (const asset of page.items) revokeUrl(asset.imageUrl)
@@ -378,6 +403,26 @@ export function ImageniaWorkbench() {
     if (editingUrl.current) URL.revokeObjectURL(editingUrl.current)
     editingUrl.current = null
     setEditingAsset(null)
+    setGenerationDraft((value) => value.sourceAssetId ? { ...value, prompt: "", sourceAssetId: undefined } : value)
+  }
+
+  function reusePrompt(asset: ImageAsset) {
+    editController.current?.abort()
+    editController.current = null
+    if (editingUrl.current) URL.revokeObjectURL(editingUrl.current)
+    editingUrl.current = null
+    setEditingAsset(null)
+    setRetryInput(null)
+    setGenerationDraft((value) => ({
+      ...value,
+      prompt: asset.prompt,
+      size: asset.size,
+      sourceAssetId: undefined,
+      restoredInput: null,
+    }))
+    closeDetail()
+    revealCreator()
+    toast.info("已填入提示词，确认服务和模型后即可提交。")
   }
 
   async function beginEdit(asset: ImageAsset) {
@@ -436,10 +481,41 @@ export function ImageniaWorkbench() {
     } finally { setIsSubmitting(false) }
   }
 
+  function clearQuery() {
+    setQueryInput("")
+    setQuery("")
+  }
+
   function resetFilters() {
     setFavoriteOnly(false)
     setKindFilter("all")
+    clearQuery()
   }
+
+  function toggleTheme() {
+    setTheme((current) => {
+      const next = current === "dark" ? "light" : "dark"
+      persistTheme(next)
+      return next
+    })
+  }
+
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(queryInput.trim()), 250)
+    return () => window.clearTimeout(timer)
+  }, [queryInput])
+
+  React.useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target
+      if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return
+      event.preventDefault()
+      document.getElementById("imagenia-library-search")?.focus()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
 
   const generationForm = <GenerationForm
     configured={configured}
@@ -453,11 +529,14 @@ export function ImageniaWorkbench() {
     onSubmit={submitGeneration}
   />
 
+  const themeLabel = theme === "dark" ? "切换到浅色外观" : "切换到深色外观"
+
   return (
-    <main className="imagenia-root imagenia-workbench">
+    <WorkbenchThemeProvider theme={theme}>
+    <main className={cn("imagenia-root imagenia-workbench", theme === "dark" && "dark")}>
       <PortalContainerProvider container={portalContainer}>
         <TooltipProvider>
-          <div className="mx-auto flex h-full w-full max-w-[1540px] flex-col gap-4 p-3 sm:p-4 lg:px-6">
+          <div className={cn("mx-auto flex h-full w-full max-w-[1540px] flex-col gap-4 p-3 sm:p-4 lg:px-6", theme === "dark" && "dark")}>
             <header className="flex shrink-0 items-center justify-between gap-3 border-b pb-3">
               <div className="flex min-w-0 items-center gap-2 sm:gap-3">
                 <img
@@ -497,6 +576,15 @@ export function ImageniaWorkbench() {
                   <HeartIcon className={favoriteOnly ? "fill-current text-rose-600" : ""} aria-hidden="true" />
                   <span className="hidden sm:inline">仅看收藏</span>
                 </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button type="button" variant="outline" size="sm" aria-label={themeLabel} aria-pressed={theme === "dark"} onClick={toggleTheme}>
+                      {theme === "dark" ? <SunIcon aria-hidden="true" /> : <MoonIcon aria-hidden="true" />}
+                      <span className="hidden lg:inline">{theme === "dark" ? "浅色" : "深色"}</span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{themeLabel}</TooltipContent>
+                </Tooltip>
                 <Button type="button" variant="outline" size="sm" aria-label="配置" title="配置" onClick={() => setSettingsOpen(true)}>
                   <Settings2Icon aria-hidden="true" />
                   <span className="hidden sm:inline">配置</span>
@@ -527,15 +615,42 @@ export function ImageniaWorkbench() {
             <div className={cn("grid min-h-0 flex-1 gap-4", !isCompact && "md:grid-cols-[minmax(280px,340px)_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]")}>
               {!isCompact ? <aside className="flex min-h-0 flex-col" aria-label="图像创作">{generationForm}</aside> : null}
               <section aria-labelledby="library-title" className="flex min-h-0 min-w-0 flex-col">
-                <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <ImagesIcon className="size-5 text-muted-foreground" aria-hidden="true" />
-                      <h2 id="library-title" className="m-0 text-lg font-semibold">图片资料库</h2>
+                <div className="mb-3 flex shrink-0 flex-col gap-3">
+                  <div className="flex flex-wrap items-end justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <ImagesIcon className="size-5 text-muted-foreground" aria-hidden="true" />
+                        <h2 id="library-title" className="m-0 text-lg font-semibold">图片资料库</h2>
+                      </div>
+                      <p className="mb-0 mt-1 truncate text-sm text-muted-foreground" title={query ? `搜索“${query}”` : undefined}>
+                        {query ? `搜索“${query}” · ` : ""}{assets.length} 张已加载作品 · 全局共享
+                      </p>
                     </div>
-                    <p className="mb-0 mt-1 text-sm text-muted-foreground">{assets.length} 张已加载作品 · 全局共享</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    <div className="relative min-w-48 flex-1">
+                      <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                      <Input
+                        id="imagenia-library-search"
+                        value={queryInput}
+                        maxLength={80}
+                        placeholder="搜索提示词"
+                        aria-label="搜索提示词"
+                        aria-keyshortcuts="/"
+                        className="px-8"
+                        onChange={(event) => setQueryInput(event.target.value.replace(/[\u0000-\u001F\u007F]/g, ""))}
+                      />
+                      {queryInput ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button type="button" variant="ghost" size="icon-xs" className="absolute top-1/2 right-1 -translate-y-1/2" aria-label="清除搜索" onClick={clearQuery}>
+                              <XIcon aria-hidden="true" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>清除搜索</TooltipContent>
+                        </Tooltip>
+                      ) : null}
+                    </div>
                     <SlidersHorizontalIcon className="size-4 text-muted-foreground" aria-hidden="true" />
                     <ToggleGroup
                       type="single"
@@ -564,11 +679,13 @@ export function ImageniaWorkbench() {
                 ) : <AssetWaterfall
                   assets={assets}
                   filtered={filtersActive}
+                  searching={query.length > 0}
                   highlightedAssetId={highlightedAssetId}
                   isLoading={isLoading}
                   isLoadingMore={isLoadingMore}
                   hasMore={Boolean(nextCursor)}
                   loadMoreError={loadMoreError}
+                  scrollRootRef={libraryScroll}
                   onLoadMore={loadMore}
                   onResetFilters={resetFilters}
                   onOpen={(asset) => selectAsset(asset.id)}
@@ -614,6 +731,7 @@ export function ImageniaWorkbench() {
             onDelete={deleteAsset}
             onToggleFavorite={toggleFavorite}
             onOpenSource={openSource}
+            onReusePrompt={reusePrompt}
           />
 
           <SettingsSheet
@@ -623,10 +741,11 @@ export function ImageniaWorkbench() {
             onSaved={(next) => { setSettingsStatus(next); setSettingsError("") }}
           />
 
-          <div ref={setPortalContainer} data-imagenia-portal-root />
-          <Toaster position="bottom-right" richColors closeButton />
+          <div ref={setPortalContainer} className={theme === "dark" ? "dark" : undefined} data-imagenia-portal-root />
+          <Toaster position="bottom-right" richColors closeButton theme={theme} />
         </TooltipProvider>
       </PortalContainerProvider>
     </main>
+    </WorkbenchThemeProvider>
   )
 }

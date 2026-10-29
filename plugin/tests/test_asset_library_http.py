@@ -74,6 +74,56 @@ async def test_invalid_filters_and_cursors_never_echo_input_or_execute_sql(tmp_p
 
 
 @pytest.mark.anyio
+async def test_prompt_search_is_a_literal_casefolded_substring(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAGENIA_OPENAI_API_KEY", "sk-fake")
+    app = create_app(tmp_path / "data", provider=FakeImageProvider())
+    prompts = ("Rainy alley neon", "sunny greenhouse", "100% silk", "a_b pattern", "雨后的弄堂", "token alpha", "token beta", "token gamma")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+        for prompt in prompts:
+            assert (await http.post("/api/imagenia/jobs/generate", json={"prompt": prompt})).status_code == 202
+            assert app.worker.process_next()
+        app.database.execute("UPDATE image_assets SET prompt=? WHERE prompt=?", ("path\\name", "sunny greenhouse"))
+        app.database.commit()
+
+        async def found(**params: str) -> list[str]:
+            body = (await http.get("/api/imagenia/assets", params=params)).json()
+            return [item["prompt"] for item in body["items"]]
+
+        assert await found(q="rainy") == ["Rainy alley neon"]
+        assert await found(q="RAINY") == ["Rainy alley neon"]
+        assert await found(q="弄堂") == ["雨后的弄堂"]
+        assert await found(q="%") == ["100% silk"]
+        assert await found(q="_") == ["a_b pattern"]
+        assert await found(q="\\") == ["path\\name"]
+        assert await found(q="' OR 1=1 --") == []
+        assert await found(q="   ") == await found()
+        rain_id = next(item["id"] for item in (await http.get("/api/imagenia/assets")).json()["items"] if item["prompt"] == "Rainy alley neon")
+        assert (await http.patch(f"/api/imagenia/assets/{rain_id}", json={"is_favorite": True})).status_code == 200
+        assert await found(q="alley", favorite="true") == ["Rainy alley neon"]
+        assert await found(q="弄堂", favorite="true") == []
+        seen: list[str] = []
+        cursor = None
+        for _ in range(4):
+            params = {"q": "token", "limit": "1"}
+            if cursor:
+                params["cursor"] = cursor
+            page = (await http.get("/api/imagenia/assets", params=params)).json()
+            seen.extend(item["prompt"] for item in page["items"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+        assert sorted(seen) == ["token alpha", "token beta", "token gamma"]
+        long = "x" * 81
+        too_long = await http.get("/api/imagenia/assets", params={"q": long})
+        newline = await http.get("/api/imagenia/assets", params={"q": "a\nb"})
+        duplicate = await http.get("/api/imagenia/assets?q=a&q=b")
+        for result, secret in ((too_long, long), (newline, "a\nb"), (duplicate, "q=b")):
+            assert result.status_code == 422
+            assert secret not in result.text
+            assert result.json()["error"]["code"] == "invalid_filter"
+
+
+@pytest.mark.anyio
 async def test_mixed_jpeg_and_png_library_lists_and_serves_original_bytes(tmp_path, monkeypatch):
     monkeypatch.setenv("IMAGENIA_OPENAI_API_KEY", "sk-fake")
     app = create_app(tmp_path / "data", provider=FakeImageProvider())

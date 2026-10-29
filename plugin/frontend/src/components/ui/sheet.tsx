@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { XIcon } from "lucide-react"
 
 import { usePortalContainer } from "@/components/imagenia/portal-root"
+import { useWorkbenchTheme } from "@/components/imagenia/theme"
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />
@@ -28,9 +29,10 @@ function SheetPortal({
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Portal>) {
   const container = usePortalContainer()
+  const theme = useWorkbenchTheme()
   return (
     <SheetPrimitive.Portal container={container ?? undefined} {...props}>
-      <div className="imagenia-root" data-slot="sheet-portal">{children}</div>
+      <div className={cn("imagenia-root", theme === "dark" && "dark")} data-slot="sheet-portal">{children}</div>
     </SheetPrimitive.Portal>
   )
 }
