@@ -6,7 +6,7 @@ Imagenia 是面向 QwenPaw 2.2.1 的本地优先 AI 图像工作台：以 `gener
 
 ## 核心能力
 
-- **多图像服务接入**：每套服务可选 `openai`（预设 `gpt-image-1`）、`minimax`（预设 `image-01`）或 `custom`（任意 OpenAI Images 兼容根地址），每个模型声明各自支持的画幅、质量与编辑能力。
+- **多图像服务接入**：每套服务可选 `openai`（预设 `gpt-image-1`）、`minimax`（预设 `MiniMax-H3-Image`／`MiniMax-H3-Image-Highspeed`）或 `custom`（任意 OpenAI Images 兼容根地址），每个模型声明各自支持的画幅、质量与编辑能力。
 - **生成与编辑**：表单只开放提示词、画幅（方形／横向／纵向）与质量（标准／高质量）；编辑从已有资产进入，结果作为新资产保存并保留直接来源，不覆盖原图。
 - **后台任务队列**：提交返回 `202` 与 `job_id`，单 worker 串行执行，前端轮询 `pending`／`running`／`succeeded`／`failed`；重启后恢复排队任务。
 - **图片资料库**：全局共享，游标分页，支持提示词搜索、「全部／生成／编辑」筛选、「仅看收藏」、详情中的下载与复制提示词、再次创作，以及浅色／深色外观。

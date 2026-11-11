@@ -11,7 +11,7 @@
 - 后端负责 API Key、OpenAI 请求、图片元数据、收藏状态和资源访问；前端只负责交互和展示。
 - 图片第一阶段只保存在 QwenPaw 本机；未来增加同步接口时，插件只负责上传，由服务器提供存储和同步能力。
 - 图片和收藏采用全局共享，不按 Agent 或工作区隔离。
-- 图像调用支持 OpenAI Images、MiniMax 原生图像接口和自定义 OpenAI Images 兼容协议，支持多套服务配置及每套服务的多个模型；不自动探测协议或切换服务。
+- 图像调用支持 OpenAI Images、MiniMax H3-Image 接口和自定义 OpenAI Images 兼容协议，支持多套服务配置及每套服务的多个模型；不自动探测协议或切换服务。
 
 ## 第一版建议决策
 
@@ -104,7 +104,7 @@ V1 核心功能已实现；多服务选择与内置 OpenAI／MiniMax 预设分�
 ## 已接受的内置图像服务决策
 
 - 每套服务通过 `provider` 选择 `openai`、`minimax` 或 `custom`；预设只用于创建时填充地址和模型，服务类型创建后不在界面修改。
-- OpenAI 使用 `/images/generations` 与 multipart `/images/edits`；MiniMax 使用原生 `/image_generation`，返回 JPEG、无质量参数、不支持编辑；`custom` 保持原 OpenAI Images 兼容行为。
+- OpenAI 使用 `/images/generations` 与 multipart `/images/edits`；MiniMax 使用 H3-Image 的 `/images/generations` 与 JSON `/images/edits`（面积固定 `1K`），返回 JPEG、无质量参数、支持编辑；`custom` 保持原 OpenAI Images 兼容行为。
 - `services.json` 升级为版本 2；旧版本读取为 `custom`，连接指纹不变，已排队任务无需重新提交。
 - 图像库接受并保存 PNG 或 JPEG，按实际格式记录后缀和媒体类型。
 - 详细理由见 [ADR 0006](docs/adr/0006-built-in-image-provider-presets.md)，配置样例见 `docs/services-config-sample.json`。

@@ -8,7 +8,7 @@ const model = { id: "model-a", name: "image-model", sizes: ["square"], qualities
 const service = { id: "a", provider: "openai", name: "Service A", configured: true, enabled: true, read_only: false, active_jobs: 0, models: [model] }
 const providers = [
   { id: "openai", name: "OpenAI 图像", base_url: "https://api.openai.com/v1", models: [{ ...model, supports_edit: true }] },
-  { id: "minimax", name: "MiniMax 图像", base_url: "https://api.minimax.cn/v1", models: [{ ...model, name: "image-01" }] },
+  { id: "minimax", name: "MiniMax 图像", base_url: "https://api.minimax.cn/v1", models: [{ ...model, name: "MiniMax-H3-Image", supports_edit: true }] },
   { id: "custom", name: "自定义兼容服务", base_url: "", models: [] },
 ]
 const catalog = { services: [service], default: { service_id: "a", model_id: "model-a" }, providers }

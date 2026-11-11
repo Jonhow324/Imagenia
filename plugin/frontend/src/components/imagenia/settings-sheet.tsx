@@ -146,7 +146,7 @@ export function SettingsSheet({ open, onOpenChange, status, onSaved }: Props) {
                   onChange={event => setDraft({ ...draft, base_url: event.target.value })} required />
                 <FieldDescription>
                   {draft.provider === "minimax"
-                    ? "MiniMax 根地址，例如 https://api.minimax.cn/v1（国际版 https://api.minimax.io/v1）；不要填写 /image_generation。"
+                    ? "MiniMax 根地址，例如 https://api.minimax.cn/v1（国际版 https://api.minimax.io/v1）；不要填写 /images/generations。"
                     : "不含 /images/generations；自定义服务需支持 OpenAI Images 生成与 multipart 编辑协议。"}
                 </FieldDescription>
               </Field>

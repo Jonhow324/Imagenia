@@ -111,31 +111,20 @@ class OpenAIImageProvider:
             raise ProviderError("service_unavailable") from None
 
 
-# MiniMax reports business failures as HTTP 200 with ``base_resp.status_code``.
-# Keep the actionable ones distinct so the worker can explain the real cause
-# instead of collapsing everything into "service unavailable".
-MINIMAX_ERROR_CODES = {
-    1002: "rate_limited",
-    1004: "invalid_api_key",
-    1008: "insufficient_balance",
-    2013: "invalid_request",
-}
-
-
-def minimax_error_code(status_code: object) -> str:
-    return MINIMAX_ERROR_CODES.get(status_code, "service_unavailable")
-
-
 class MiniMaxImageProvider:
-    """Generate one image with MiniMax's native image_generation endpoint.
+    """Generate or edit one image with MiniMax's H3-Image Images API.
 
-    MiniMax has no quality switch and no image-edit API, so ``quality`` is
-    accepted for the shared provider contract but not forwarded. The response is
-    base64-encoded JPEG; the generation worker accepts and stores either PNG or
-    JPEG without re-encoding.
+    The H3-Image endpoints use OpenAI-style paths and ``data[0].b64_json``
+    responses, but size is chosen with ``aspect_ratio`` plus an ``area`` tier
+    instead of pixel dimensions. There is no quality switch, so ``quality`` is
+    accepted for the shared provider contract but not forwarded. The default
+    JPEG output is stored as-is by the generation worker.
     """
 
     aspect_ratios = {"square": "1:1", "landscape": "16:9", "portrait": "9:16"}
+    # 1K keeps latency, token cost and file size close to the legacy image-01
+    # output; larger tiers are available upstream but not exposed by the UI.
+    area = "1K"
 
     def __init__(self, key_lookup: Callable[[], str | None], *,
                  base_url: str | Callable[[], str] = DEFAULT_MINIMAX_BASE_URL,
@@ -145,35 +134,44 @@ class MiniMaxImageProvider:
         self.model = model
 
     def generate(self, prompt: str, *, size: str, quality: str) -> bytes:
+        return self._post("/images/generations", {
+            "prompt": prompt, "aspect_ratio": self.aspect_ratios[size],
+            "area": self.area, "response_format": "b64_json", "n": 1})
+
+    def edit(self, prompt: str, source: bytes, *, size: str, quality: str) -> bytes:
+        source_format = sniff_image(source)
+        if source_format is None:
+            raise ProviderError("invalid_request")
+        encoded = base64.b64encode(source).decode("ascii")
+        return self._post("/images/edits", {
+            "prompt": prompt,
+            "images": [{"image_url": f"data:{source_format.mime};base64,{encoded}"}],
+            "aspect_ratio": self.aspect_ratios[size],
+            "area": self.area, "response_format": "b64_json", "n": 1})
+
+    def _post(self, path: str, body: dict[str, Any]) -> bytes:
         key = self.key_lookup()
         if not key:
             raise ProviderError("not_configured")
         base_url = self.base_url() if callable(self.base_url) else self.base_url
         model = self.model() if callable(self.model) else self.model
         request = urllib.request.Request(
-            f"{base_url.rstrip('/')}/image_generation",
-            data=json.dumps({"model": model, "prompt": prompt,
-                             "aspect_ratio": self.aspect_ratios[size],
-                             "response_format": "base64", "n": 1}).encode("utf-8"),
+            f"{base_url.rstrip('/')}{path}",
+            data=json.dumps({"model": model, **body}).encode("utf-8"),
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             method="POST",
         )
         try:
             with urllib.request.urlopen(request, timeout=570) as response:
                 payload = json.load(response)
-            if not isinstance(payload, dict):
-                raise ProviderError("invalid_response")
-            base_resp = payload.get("base_resp")
-            status_code = base_resp.get("status_code", 0) if isinstance(base_resp, dict) else 0
-            if status_code:
-                raise ProviderError(minimax_error_code(status_code))
-            return base64.b64decode(payload["data"]["image_base64"][0], validate=True)
-        except ProviderError:
-            raise
+            return base64.b64decode(payload["data"][0]["b64_json"], validate=True)
         except urllib.error.HTTPError as exc:
+            # H3-Image reports failures as HTTP status codes: 400 bad params,
+            # 422 content safety, 402 balance, 429 rate limit.
             code = ("invalid_api_key" if exc.code in (401, 403) else
                     "insufficient_balance" if exc.code == 402 else
-                    "rate_limited" if exc.code == 429 else "service_unavailable")
+                    "rate_limited" if exc.code == 429 else
+                    "invalid_request" if exc.code in (400, 422) else "service_unavailable")
             raise ProviderError(code) from None
         except urllib.error.URLError as exc:
             raise ProviderError("timeout" if isinstance(exc.reason, TimeoutError) else "service_unavailable") from None
@@ -183,11 +181,6 @@ class MiniMaxImageProvider:
             raise ProviderError("invalid_response") from None
         except OSError:
             raise ProviderError("service_unavailable") from None
-
-    def edit(self, prompt: str, source: bytes, *, size: str, quality: str) -> bytes:
-        # The model catalogue keeps editing disabled; reject misconfiguration
-        # explicitly instead of sending a request the endpoint cannot serve.
-        raise ProviderError("edit_not_supported")
 
 
 def provider_for(selected: dict[str, Any]) -> ImageProvider:

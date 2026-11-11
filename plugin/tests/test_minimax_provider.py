@@ -1,4 +1,4 @@
-"""MiniMax image_generation wire contract without network or billable requests."""
+"""MiniMax H3-Image wire contract without network or billable requests."""
 import base64
 import io
 import json
@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from src.imagenia_plugin.provider import MiniMaxImageProvider, ProviderError  # noqa: E402
+from src.imagenia_plugin.provider import FakeImageProvider, MiniMaxImageProvider, ProviderError  # noqa: E402
 
 
 def jpeg_bytes(width: int = 16, height: int = 16) -> bytes:
@@ -20,18 +20,23 @@ def jpeg_bytes(width: int = 16, height: int = 16) -> bytes:
     return b"\xff\xd8" + app0 + frame + b"\xff\xd9"
 
 
-def test_generate_posts_native_request_and_decodes_base64():
+def image_response(image: bytes) -> io.BytesIO:
+    return io.BytesIO(json.dumps({
+        "created": 1792308678,
+        "data": [{"b64_json": base64.b64encode(image).decode(), "size": "1360x768",
+                  "revised_prompt": "enhanced prompt"}],
+        "output_format": "jpeg", "usage": {"generated_images": 1}, "request_id": "trace",
+    }).encode())
+
+
+def test_generate_posts_h3_request_and_decodes_base64():
     calls = []
     image = jpeg_bytes(1280, 720)
 
     def fake_open(request, timeout):
         calls.append((request.full_url, request.get_method(), json.loads(request.data),
                       request.get_header("Authorization"), timeout))
-        return io.BytesIO(json.dumps({
-            "id": "trace", "data": {"image_base64": [base64.b64encode(image).decode()]},
-            "metadata": {"failed_count": "0", "success_count": "1"},
-            "base_resp": {"status_code": 0, "status_msg": "success"},
-        }).encode())
+        return image_response(image)
 
     monkey = pytest.MonkeyPatch()
     monkey.setattr(urllib.request, "urlopen", fake_open)
@@ -43,11 +48,11 @@ def test_generate_posts_native_request_and_decodes_base64():
 
     assert len(calls) == 1
     url, method, body, authorization, timeout = calls[0]
-    assert url == "https://api.minimax.cn/v1/image_generation"
+    assert url == "https://api.minimax.cn/v1/images/generations"
     assert method == "POST" and timeout == 570
     assert authorization == "Bearer mm-test-only"
-    assert body == {"model": "image-01", "prompt": "a paper forest", "aspect_ratio": "16:9",
-                    "response_format": "base64", "n": 1}
+    assert body == {"model": "MiniMax-H3-Image", "prompt": "a paper forest", "aspect_ratio": "16:9",
+                    "area": "1K", "response_format": "b64_json", "n": 1}
 
 
 def test_square_and_portrait_aspect_ratios():
@@ -55,7 +60,7 @@ def test_square_and_portrait_aspect_ratios():
 
     def fake_open(request, timeout):
         seen.append(json.loads(request.data)["aspect_ratio"])
-        return io.BytesIO(json.dumps({"data": {"image_base64": [base64.b64encode(b"jpeg").decode()]}}).encode())
+        return image_response(b"jpeg")
 
     monkey = pytest.MonkeyPatch()
     monkey.setattr(urllib.request, "urlopen", fake_open)
@@ -73,55 +78,111 @@ def test_configured_base_url_and_model_are_used():
 
     def fake_open(request, timeout):
         captured.append((request.full_url, json.loads(request.data)["model"]))
-        return io.BytesIO(json.dumps({"data": {"image_base64": [base64.b64encode(b"jpeg").decode()]}}).encode())
+        return image_response(b"jpeg")
 
     monkey = pytest.MonkeyPatch()
     monkey.setattr(urllib.request, "urlopen", fake_open)
     try:
         provider = MiniMaxImageProvider(lambda: "key", base_url="https://api.minimax.io/v1/",
-                                        model="image-01-live")
+                                        model="MiniMax-H3-Image-Highspeed")
         provider.generate("p", size="square", quality="standard")
     finally:
         monkey.undo()
-    assert captured == [("https://api.minimax.io/v1/image_generation", "image-01-live")]
+    assert captured == [("https://api.minimax.io/v1/images/generations", "MiniMax-H3-Image-Highspeed")]
 
 
-def test_errors_and_edit_are_stable_and_secret_free():
+@pytest.mark.parametrize("source,mime", [(FakeImageProvider.image_bytes, "image/png"),
+                                         (jpeg_bytes(), "image/jpeg")])
+def test_edit_posts_reference_image_as_data_uri(source, mime):
+    calls = []
+    result = jpeg_bytes(32, 32)
+
+    def fake_open(request, timeout):
+        calls.append((request.full_url, request.get_method(), json.loads(request.data),
+                      request.get_header("Authorization"), timeout))
+        return image_response(result)
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(urllib.request, "urlopen", fake_open)
+    try:
+        provider = MiniMaxImageProvider(lambda: "mm-test-only")
+        assert provider.edit("add a river", source, size="portrait", quality="standard") == result
+    finally:
+        monkey.undo()
+
+    assert len(calls) == 1
+    url, method, body, authorization, timeout = calls[0]
+    assert url == "https://api.minimax.cn/v1/images/edits"
+    assert method == "POST" and timeout == 570
+    assert authorization == "Bearer mm-test-only"
+    assert body == {"model": "MiniMax-H3-Image", "prompt": "add a river",
+                    "images": [{"image_url": f"data:{mime};base64,{base64.b64encode(source).decode()}"}],
+                    "aspect_ratio": "9:16", "area": "1K", "response_format": "b64_json", "n": 1}
+
+
+def test_edit_rejects_unrecognised_source_without_a_request():
+    def fail_open(request, timeout):
+        raise AssertionError("no request may be sent for an invalid source")
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(urllib.request, "urlopen", fail_open)
+    try:
+        with pytest.raises(ProviderError, match="invalid_request"):
+            MiniMaxImageProvider(lambda: "key").edit("p", b"not an image", size="square", quality="standard")
+    finally:
+        monkey.undo()
+
+
+def test_missing_key_is_not_configured_for_generate_and_edit():
+    provider = MiniMaxImageProvider(lambda: None)
     with pytest.raises(ProviderError, match="not_configured"):
-        MiniMaxImageProvider(lambda: None).generate("p", size="square", quality="standard")
+        provider.generate("p", size="square", quality="standard")
+    with pytest.raises(ProviderError, match="not_configured"):
+        provider.edit("p", FakeImageProvider.image_bytes, size="square", quality="standard")
 
-    provider = MiniMaxImageProvider(lambda: "mm-private")
-    with pytest.raises(ProviderError, match="edit_not_supported"):
-        provider.edit("p", b"source", size="square", quality="standard")
 
+@pytest.mark.parametrize("status,expected", [
+    (400, "invalid_request"),
+    (401, "invalid_api_key"),
+    (403, "invalid_api_key"),
+    (402, "insufficient_balance"),
+    (422, "invalid_request"),
+    (429, "rate_limited"),
+    (500, "service_unavailable"),
+])
+def test_http_errors_keep_their_own_code_and_stay_secret_free(status, expected):
+    def http_error(request, timeout):
+        raise urllib.error.HTTPError(request.full_url, status, "mm-private /tmp/private", {}, None)
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(urllib.request, "urlopen", http_error)
+    try:
+        with pytest.raises(ProviderError, match=expected) as error:
+            MiniMaxImageProvider(lambda: "mm-private").generate("p", size="square", quality="standard")
+    finally:
+        monkey.undo()
+    assert error.value.code == expected
+    assert "mm-private" not in str(error.value) and "/tmp/private" not in str(error.value)
+
+
+def test_edit_http_errors_use_the_same_mapping():
     def unauthorized(request, timeout):
-        raise urllib.error.HTTPError(request.full_url, 401, "mm-private /tmp/private", {}, None)
+        raise urllib.error.HTTPError(request.full_url, 401, "mm-private", {}, None)
 
     monkey = pytest.MonkeyPatch()
     monkey.setattr(urllib.request, "urlopen", unauthorized)
     try:
         with pytest.raises(ProviderError, match="invalid_api_key") as error:
-            provider.generate("p", size="square", quality="standard")
-    finally:
-        monkey.undo()
-    assert "mm-private" not in str(error.value) and "/tmp/private" not in str(error.value)
-
-    def api_error(request, timeout):
-        return io.BytesIO(json.dumps({"base_resp": {"status_code": 1004, "status_msg": "mm-private"}}).encode())
-
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(urllib.request, "urlopen", api_error)
-    try:
-        with pytest.raises(ProviderError, match="invalid_api_key") as error:
-            provider.generate("p", size="square", quality="standard")
+            MiniMaxImageProvider(lambda: "mm-private").edit(
+                "p", FakeImageProvider.image_bytes, size="square", quality="standard")
     finally:
         monkey.undo()
     assert "mm-private" not in str(error.value)
 
 
 @pytest.mark.parametrize("payload", [
-    {"data": {}}, {"data": {"image_base64": []}}, {"data": {"image_base64": ["not base64!"]}},
-    {"base_resp": {"status_code": 0}},
+    {}, {"data": []}, {"data": [{}]}, {"data": [{"b64_json": "not base64!"}]},
+    {"data": [{"error": {"code": "1027", "message": "output image failed content safety check"}}]},
 ])
 def test_invalid_responses_are_reported(payload):
     monkey = pytest.MonkeyPatch()
@@ -131,38 +192,3 @@ def test_invalid_responses_are_reported(payload):
             MiniMaxImageProvider(lambda: "key").generate("p", size="square", quality="standard")
     finally:
         monkey.undo()
-
-
-@pytest.mark.parametrize("status,expected", [
-    (1002, "rate_limited"),
-    (1004, "invalid_api_key"),
-    (1008, "insufficient_balance"),
-    (2013, "invalid_request"),
-    (1013, "service_unavailable"),
-])
-def test_business_errors_keep_their_own_code(status, expected):
-    """HTTP 200 + base_resp is MiniMax's normal error channel; do not flatten it."""
-    payload = {"base_resp": {"status_code": status, "status_msg": "mm-private balance detail"}}
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(urllib.request, "urlopen", lambda request, timeout: io.BytesIO(json.dumps(payload).encode()))
-    try:
-        with pytest.raises(ProviderError, match=expected) as error:
-            MiniMaxImageProvider(lambda: "key").generate("p", size="square", quality="standard")
-    finally:
-        monkey.undo()
-    assert error.value.code == expected
-    assert "mm-private" not in str(error.value)
-
-
-def test_http_payment_required_maps_to_insufficient_balance():
-    def payment_required(request, timeout):
-        raise urllib.error.HTTPError(request.full_url, 402, "mm-private", {}, None)
-
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(urllib.request, "urlopen", payment_required)
-    try:
-        with pytest.raises(ProviderError, match="insufficient_balance") as error:
-            MiniMaxImageProvider(lambda: "key").generate("p", size="square", quality="standard")
-    finally:
-        monkey.undo()
-    assert "mm-private" not in str(error.value)

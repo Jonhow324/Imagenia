@@ -28,11 +28,11 @@
       "enabled": true,
       "models": [
         {
-          "id": "minimax-image-01",
-          "name": "image-01",
+          "id": "minimax-h3-image",
+          "name": "MiniMax-H3-Image",
           "sizes": ["square", "landscape", "portrait"],
           "qualities": ["standard"],
-          "supports_edit": false
+          "supports_edit": true
         }
       ]
     },

@@ -18,7 +18,7 @@ DEFAULT_MODEL = "gpt-image-2.5"
 # Mainland China endpoint from platform.minimax.cn. International deployments
 # can use https://api.minimax.io/v1 with the same request contract.
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.cn/v1"
-DEFAULT_MINIMAX_MODEL = "image-01"
+DEFAULT_MINIMAX_MODEL = "MiniMax-H3-Image"
 
 
 class ConfigurationUnavailable(Exception):

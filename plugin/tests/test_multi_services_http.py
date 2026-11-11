@@ -395,8 +395,8 @@ async def test_explicit_invalid_selection_never_uses_the_default(app, partial):
 def minimax_service():
     return {"provider": "minimax", "name": "MiniMax", "base_url": "https://api.minimax.test/v1",
             "api_key": "mm-service-key",
-            "models": [{"name": "image-01", "sizes": ["square", "landscape", "portrait"],
-                        "qualities": ["standard"], "supports_edit": False}]}
+            "models": [{"name": "MiniMax-H3-Image", "sizes": ["square", "landscape", "portrait"],
+                        "qualities": ["standard"], "supports_edit": True}]}
 
 
 @pytest.mark.anyio
@@ -409,8 +409,10 @@ async def test_catalog_offers_builtin_presets_and_keeps_custom_backward_compatib
         assert openai["base_url"] == "https://api.openai.com/v1"
         assert openai["models"][0]["name"] == "gpt-image-1" and openai["models"][0]["supports_edit"]
         assert minimax["base_url"] == "https://api.minimax.cn/v1"
-        assert minimax["models"][0] == {"name": "image-01", "sizes": ["square", "landscape", "portrait"],
-                                        "qualities": ["standard"], "supports_edit": False}
+        assert minimax["models"][0] == {"name": "MiniMax-H3-Image", "sizes": ["square", "landscape", "portrait"],
+                                        "qualities": ["standard"], "supports_edit": True}
+        assert minimax["models"][1] == {"name": "MiniMax-H3-Image-Highspeed", "sizes": ["square", "landscape", "portrait"],
+                                        "qualities": ["standard"], "supports_edit": True}
 
         custom = await add(http)
         assert custom["provider"] == "custom"
@@ -451,7 +453,7 @@ async def test_provider_change_is_locked_while_a_job_is_active(app):
 
 
 @pytest.mark.anyio
-async def test_bound_minimax_service_uses_native_adapter_and_stores_jpeg(app, monkeypatch):
+async def test_bound_minimax_service_uses_h3_adapter_and_stores_jpeg(app, monkeypatch):
     import base64
     import io
     import urllib.request
@@ -464,8 +466,8 @@ async def test_bound_minimax_service_uses_native_adapter_and_stores_jpeg(app, mo
 
     def fake_open(request, timeout):
         requests.append((request.full_url, json.loads(request.data)))
-        return io.BytesIO(json.dumps({"data": {"image_base64": [base64.b64encode(jpeg).decode()]},
-                                      "base_resp": {"status_code": 0}}).encode())
+        return io.BytesIO(json.dumps({"data": [{"b64_json": base64.b64encode(jpeg).decode()}],
+                                      "output_format": "jpeg"}).encode())
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_open)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
@@ -481,6 +483,46 @@ async def test_bound_minimax_service_uses_native_adapter_and_stores_jpeg(app, mo
                                    (job["result_asset_id"],)).fetchone()
         assert row["file_path"].endswith(".jpg") and row["mime_type"] == "image/jpeg"
 
-    assert requests == [("https://api.minimax.test/v1/image_generation",
-                         {"model": "image-01", "prompt": "private prompt", "aspect_ratio": "1:1",
-                          "response_format": "base64", "n": 1})]
+    assert requests == [("https://api.minimax.test/v1/images/generations",
+                         {"model": "MiniMax-H3-Image", "prompt": "private prompt", "aspect_ratio": "1:1",
+                          "area": "1K", "response_format": "b64_json", "n": 1})]
+
+
+@pytest.mark.anyio
+async def test_bound_minimax_service_edits_with_a_data_uri_reference(app, monkeypatch):
+    import base64
+    import io
+    import urllib.request
+    from src.imagenia_plugin.provider import provider_for
+
+    app.provider_factory = provider_for
+    jpeg = (b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+            b"\xff\xc0\x00\x11\x08\x00\x10\x00\x10\x03\x01\x11\x00\x02\x11\x00\x03\x11\x00\xff\xd9")
+    requests = []
+
+    def fake_open(request, timeout):
+        requests.append((request.full_url, json.loads(request.data)))
+        return io.BytesIO(json.dumps({"data": [{"b64_json": base64.b64encode(jpeg).decode()}],
+                                      "output_format": "jpeg"}).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_open)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+        created = (await http.post("/api/imagenia/services", json=minimax_service())).json()["services"][-1]
+        queued = await http.post("/api/imagenia/jobs/generate", json=selection(created))
+        assert app.worker.process_next()
+        source_id = (await http.get(f"/api/imagenia/jobs/{queued.json()['job_id']}")).json()["result_asset_id"]
+
+        edited = await http.post("/api/imagenia/jobs/edit", json={
+            "source_asset_id": source_id, "prompt": "add a river", "size": "landscape", "quality": "standard",
+            "service_id": created["id"], "model_id": created["models"][0]["id"]})
+        assert edited.status_code == 202
+        assert app.worker.process_next()
+        job = (await http.get(f"/api/imagenia/jobs/{edited.json()['job_id']}")).json()
+        assert job["status"] == "succeeded"
+        result = (await http.get(f"/api/imagenia/assets/{job['result_asset_id']}")).json()
+        assert result["kind"] == "edited" and result["source_asset_id"] == source_id
+
+    assert requests[1] == ("https://api.minimax.test/v1/images/edits",
+                           {"model": "MiniMax-H3-Image", "prompt": "add a river",
+                            "images": [{"image_url": f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode()}"}],
+                            "aspect_ratio": "16:9", "area": "1K", "response_format": "b64_json", "n": 1})

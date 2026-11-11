@@ -89,12 +89,12 @@ Imagenia/
 | 类型 | 协议与默认地址 | 预设模型 | 画幅映射 | 质量 | 图片编辑 |
 | --- | --- | --- | --- | --- | --- |
 | `openai` | `POST {base_url}/images/generations`；`https://api.openai.com/v1` | `gpt-image-1` | 1024×1024、1536×1024、1024×1536 | `standard`→`medium`，`high`→`high` | 支持 multipart `/images/edits` |
-| `minimax` | `POST {base_url}/image_generation`；`https://api.minimax.cn/v1`（国际版 `https://api.minimax.io/v1`） | `image-01` | `1:1`、`16:9`、`9:16` | 无 API 参数；预设只声明 `standard` | 不支持 |
+| `minimax` | `POST {base_url}/images/generations`；`https://api.minimax.cn/v1`（国际版 `https://api.minimax.io/v1`） | `MiniMax-H3-Image`、`MiniMax-H3-Image-Highspeed` | `1:1`、`16:9`、`9:16`，面积档位固定 `1K` | 无 API 参数；预设只声明 `standard` | 支持 JSON `/images/edits`，参考图以 data URI 传入 |
 | `custom` | 任意 OpenAI Images 兼容根地址 | 用户填写 | 现有映射 | 现有映射 | 由模型能力声明决定 |
 
 OpenAI 预设使用 `gpt-image-1`。官方仍列出 `dall-e-3` 等旧模型，但它们的尺寸（如 1792×1024）和质量（`hd`）与工作台固定的画幅／质量映射不同，因此未加入预设。新增服务默认是“自定义”，保持原有行为；选择 OpenAI 或 MiniMax 会填入默认名称、地址和模型，保存前仍可修改。自定义服务需支持当前的生成／multipart 编辑请求和 `data[0].b64_json` 响应。界面不允许修改已保存服务的类型；需要切换协议时新增服务。`GET /api/imagenia/services` 的 `providers` 字段返回上述预设（不含密钥），供前端创建表单使用。
 
-MiniMax 的原生接口返回 `data.image_base64` 中的 JPEG；工作线程按真实字节识别 PNG／JPEG，保存为 `.png` 或 `.jpg` 并记录 `mime_type`。MiniMax 没有编辑接口，因此其模型不声明编辑能力。质量字段不会发给 MiniMax；即使手工声明 `high`，实际请求也没有质量差异。
+MiniMax 预设使用 H3-Image 新接口（2026-11-11 起替代旧 `/image_generation` 契约）：请求发送 `model`、`prompt`、`aspect_ratio`、`area: "1K"`、`response_format: "b64_json"` 和 `n: 1`，响应读取 `data[0].b64_json`，默认输出 JPEG；错误直接用 HTTP 状态码（400／422→`invalid_request`，401／403→`invalid_api_key`，402→`insufficient_balance`，429→`rate_limited`）。面积档位固定 `1K`，接近旧 `image-01` 的体积与费用；上游还提供 `2K`／`4K`，但工作台不暴露。编辑把来源图片以 `data:<mime>;base64,…` 放入 `images[].image_url`，预设两个模型均声明编辑能力。工作线程按真实字节识别 PNG／JPEG，保存为 `.png` 或 `.jpg` 并记录 `mime_type`。质量字段不会发给 MiniMax；即使手工声明 `high`，实际请求也没有质量差异。已保存的旧 `image-01` 服务需在设置中把模型名改为 H3-Image 系列才能继续调用。
 
 保存后可设置全局默认服务／模型，或在生成表单中自行选择。浏览器记住最近选择；失效、停用或不支持编辑时要求重新选择，不自动切换服务。编辑可使用其他服务的模型，原图保留。任务和图片详情显示提交时的服务名称及模型；失败任务可恢复原参数到表单，确认后再提交。
 
@@ -170,7 +170,7 @@ MiniMax 的原生接口返回 `data.image_base64` 中的 JPEG；工作线程按�
 
 生成提交 `POST /api/imagenia/jobs/generate` 返回 `202` 与 `job_id`；后台独立单 worker 将任务从 `pending` 处理到 `running`、`succeeded` 或 `failed`，前端每 1.5 秒通过 `GET /api/imagenia/jobs/{job_id}` 轮询。重新打开页面时通过 `GET /api/imagenia/jobs` 恢复近期任务。成功后从 `GET /api/imagenia/assets` 刷新资料库，图片字节从需要同一 Bearer token 的 `/api/imagenia/assets/{id}/content` 获取；新资产高亮、不自动弹详情。资产文件按年月与 UUID 保存在插件数据目录，元数据在 SQLite 中。上次运行遗留的 `running` 标记为 `interrupted`，`pending` 恢复执行。队列最多允许 50 个待处理任务（第 51 个返回 429）。运行中任务的 10 分钟截止时间到达后标记为 `failed/timeout`；不会强杀可能已经发出计费请求的 provider 调用，单 worker 在该调用返回前不会处理下一任务，迟到的结果不得写入资产。provider 429、超时、不可用及非预期响应分别映射为 `rate_limited`、`timeout`、`service_unavailable`、`invalid_response`，错误详情不包含上游异常文本、密钥或内部路径。
 
-正式宿主使用任务提交时选定的服务和模型，旧配置默认模型为 `gpt-image-2.5`；OpenAI 与自定义兼容服务将画幅映射为 1024×1024、1536×1024、1024×1536，质量 `standard` 映射 `medium`、`high` 对应 `high`。MiniMax 将画幅映射为 `1:1`、`16:9`、`9:16`，不发送质量字段。生成调用可能收费，请使用可用密钥和低成本提示词谨慎验证。端到端验收需在 QwenPaw iframe 验证任务提交、轮询、重启恢复、图片展示及登录失效后的安全反馈；本机自动化不代表宿主验收完成。
+正式宿主使用任务提交时选定的服务和模型，旧配置默认模型为 `gpt-image-2.5`；OpenAI 与自定义兼容服务将画幅映射为 1024×1024、1536×1024、1024×1536，质量 `standard` 映射 `medium`、`high` 对应 `high`。MiniMax 将画幅映射为 `1:1`、`16:9`、`9:16`（面积档位固定 `1K`），不发送质量字段。生成调用可能收费，请使用可用密钥和低成本提示词谨慎验证。端到端验收需在 QwenPaw iframe 验证任务提交、轮询、重启恢复、图片展示及登录失效后的安全反馈；本机自动化不代表宿主验收完成。
 
 接入兼容网关时请填写 API 根地址（包含 `/v1` 等必要前缀），不要填写 `/images/generations` 完整接口路径。连接测试仅能检验 `/models` 的认证，不保证网关支持图像生成；真实成功生图与计费行为需在宿主手动确认。
 

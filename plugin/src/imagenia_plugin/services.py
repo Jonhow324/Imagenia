@@ -30,7 +30,9 @@ PROVIDER_PRESETS = (
                  "supports_edit": True}]},
     {"id": "minimax", "name": "MiniMax 图像", "base_url": DEFAULT_MINIMAX_BASE_URL,
      "models": [{"name": DEFAULT_MINIMAX_MODEL, "sizes": list(SIZES), "qualities": ["standard"],
-                 "supports_edit": False}]},
+                 "supports_edit": True},
+                {"name": "MiniMax-H3-Image-Highspeed", "sizes": list(SIZES), "qualities": ["standard"],
+                 "supports_edit": True}]},
     {"id": "custom", "name": "自定义兼容服务", "base_url": "", "models": []},
 )
 
